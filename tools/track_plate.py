@@ -418,7 +418,7 @@ def collect_rays(video, band, known_radius=None):
     return meta, per_frame
 
 
-def fit_all(video, per_frame, theta, ratio, rounds=3):
+def fit_all(video, per_frame, theta, ratio, rounds=3, max_residual=MAX_RESIDUAL):
     """Fit every frame, reject what cannot be the plate, then fill the holes."""
     results = []
     for pts in per_frame:
@@ -436,7 +436,7 @@ def fit_all(video, per_frame, theta, ratio, rounds=3):
 
     strong = [r for r in results if r is not None
               and r["rays"] >= MIN_RAY_SHARE
-              and r["residual"] / (r["major"] / 2) <= STRICT_RESIDUAL]
+              and r["residual"] / (r["major"] / 2) <= min(STRICT_RESIDUAL, max_residual)]
     if len(strong) < 5:
         raise SystemExit("too few usable frames to establish a plate diameter")
     radius = statistics.median(r["major"] for r in strong) / 2
@@ -462,7 +462,7 @@ def fit_all(video, per_frame, theta, ratio, rounds=3):
             continue
         if (r["rays"] < MIN_RAY_SHARE
                 or r.get("sectors", SECTORS) < MIN_SECTORS
-                or r["residual"] / (r["major"] / 2) > MAX_RESIDUAL
+                or r["residual"] / (r["major"] / 2) > max_residual
                 or abs(r["major"] - 2 * radius) / (2 * radius) > MAX_SIZE_DRIFT):
             results[i] = None
 
@@ -488,7 +488,7 @@ def fit_all(video, per_frame, theta, ratio, rounds=3):
     # is wrong exactly where the bar changes speed. Now that the frames either
     # side are measured, a gap can be seeded by interpolating between them.
     for _ in range(rounds):
-        if not _reseed(video, results, per_frame, theta, ratio, radius):
+        if not _reseed(video, results, per_frame, theta, ratio, radius, max_residual):
             break
     return results, radius
 
@@ -509,7 +509,7 @@ def _verify_hub(video, results):
     cap.release()
 
 
-def _reseed(video, results, per_frame, theta, ratio, radius, radii=None):
+def _reseed(video, results, per_frame, theta, ratio, radius, max_residual=MAX_RESIDUAL):
     measured = [i for i, r in enumerate(results) if r is not None]
     if len(measured) < 2:
         return 0
@@ -542,7 +542,7 @@ def _reseed(video, results, per_frame, theta, ratio, radius, radii=None):
                         got["sectors"] = sector_coverage(kept, got, theta, ratio)
                         if (got["rays"] >= MIN_RAY_SHARE
                                 and got["sectors"] >= MIN_SECTORS
-                                and got["residual"] / (got["major"] / 2) <= MAX_RESIDUAL
+                                and got["residual"] / (got["major"] / 2) <= max_residual
                                 and math.hypot(got["cx"] - sx, got["cy"] - sy) <= MAX_STEP_PX
                                 and hub_contrast(field, got["cx"], got["cy"],
                                                  got["major"] / 2) >= MIN_HUB_CONTRAST):
@@ -576,7 +576,8 @@ def main(argv=None):
     if len(usable) < 5:
         raise SystemExit("the plate was not found often enough to continue")
     score, theta, ratio = search_shape(usable)
-    rough, radius = fit_all(args.video, wide_points, theta, ratio, rounds=0)
+    rough, radius = fit_all(args.video, wide_points, theta, ratio, rounds=0,
+                            max_residual=args.max_residual)
 
     # Second pass, narrow band. The plate on the far end of the bar also
     # produces a strong step, and a wide band lets rays lock onto it instead.
@@ -587,7 +588,8 @@ def main(argv=None):
         theta = args.theta
     if args.ratio is not None:
         ratio = args.ratio
-    results, radius = fit_all(args.video, points, theta, ratio, rounds=args.rounds)
+    results, radius = fit_all(args.video, points, theta, ratio, rounds=args.rounds,
+                              max_residual=args.max_residual)
 
     good = [r for r in results if r is not None]
     if not good:
