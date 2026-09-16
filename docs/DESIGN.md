@@ -69,12 +69,19 @@ hides real ones.
 ### What has been verified, on one clip
 
 A 5.3 s snatch, 720x1280 at 60 fps, shot on a phone at about 19 degrees off
-square. 94 % of frames measured and none interpolated, rim scatter under 0.5 %
+square. 98 % of frames measured and none interpolated, rim scatter under 0.5 %
 of the plate radius, and the major axis direction recovered as vertical, which
 is what the geometry above predicts and which was not imposed on the search.
-The frames with no measurement are short gaps of one to seven frames where the
-hands cover too much of the rim; every frame that is reported was checked by
-eye against the footage.
+The frames with no measurement are one to three frames long, either where the
+hands cover too much of the rim or at the very end where the dropped bar is
+too motion-blurred to have an edge.
+
+Every reported frame was compared against the footage by eye. That check is not
+optional: the scatter of the rim points around the fitted ellipse measures how
+well those points agree with each other, not whether the ellipse is on the
+plate, so a fit that has settled on the wrong thing can score well. Reading a
+low scatter as a good fit was wrong twice during development, and only a
+contact sheet of every frame caught it.
 
 Not verified: any other plate colour, gym, lighting or angle. The detector
 finds red, so blue, yellow and green plates will not be found at all. This is

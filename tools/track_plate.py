@@ -51,7 +51,15 @@ MIN_POINTS = 24        # rays that must find a step before a frame is usable
 # --- acceptance -------------------------------------------------------------
 
 MIN_RAY_SHARE = 0.12       # share of rays surviving the outlier trim
-MAX_RESIDUAL = 0.02        # rim scatter, as a fraction of the plate radius
+# Rim scatter, as a fraction of the plate radius. Measured against a fit whose
+# radius is held fixed, which does not minimise the scatter the way a free
+# radius does, so this is looser than it would need to be for a free fit.
+MAX_RESIDUAL = 0.025
+# The diameter is read off the cleanest frames only. Accepting a frame and
+# trusting it to define the plate size are different jobs: a frame can be good
+# enough to report a position while still being too scattered to set the scale
+# that every other frame then inherits.
+STRICT_RESIDUAL = 0.020
 MAX_SIZE_DRIFT = 0.10      # disagreement with the set diameter
 MIN_HUB_CONTRAST = 50.0    # plate hub against plate face, see hub_contrast
 MAX_STEP_PX = 45.0         # a plate cannot move further between frames
@@ -405,12 +413,15 @@ def fit_all(video, per_frame, theta, ratio, rounds=3):
 
     strong = [r for r in results if r is not None
               and r["rays"] >= MIN_RAY_SHARE
-              and r["residual"] / (r["major"] / 2) <= MAX_RESIDUAL]
+              and r["residual"] / (r["major"] / 2) <= STRICT_RESIDUAL]
     if len(strong) < 5:
         raise SystemExit("too few usable frames to establish a plate diameter")
     radius = statistics.median(r["major"] for r in strong) / 2
 
-    # Refit with the diameter held fixed before anything is judged.
+    # Refit with the radius taken from its neighbours rather than from this one
+    # frame, before anything is judged. Where the rim is partly covered a free
+    # radius and the centre trade against each other and the fitted edge rides
+    # off towards the side with more rays.
     for i, r in enumerate(results):
         if r is None or per_frame[i] is None:
             continue
@@ -473,7 +484,7 @@ def _verify_hub(video, results):
     cap.release()
 
 
-def _reseed(video, results, per_frame, theta, ratio, radius):
+def _reseed(video, results, per_frame, theta, ratio, radius, radii=None):
     measured = [i for i, r in enumerate(results) if r is not None]
     if len(measured) < 2:
         return 0
@@ -520,6 +531,8 @@ def main(argv=None):
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("video")
     p.add_argument("--csv", default="trajectory.csv")
+    p.add_argument("--max-residual", type=float, default=MAX_RESIDUAL,
+                   help="how far the rim points may scatter, as a fraction of the radius")
     p.add_argument("--theta", type=float, default=None,
                    help="override the major axis direction instead of searching for it")
     p.add_argument("--ratio", type=float, default=None,
@@ -574,7 +587,7 @@ def main(argv=None):
     with open(args.csv, "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["frame", "t_ms", "cx_px", "cy_px", "x_mm", "y_mm",
-                    "major_px", "minor_px", "ratio", "angle_deg", "rays"])
+                    "major_px", "minor_px", "ratio", "angle_deg", "rays", "residual"])
         for i, r in enumerate(results):
             if r is None:
                 continue
@@ -585,7 +598,8 @@ def main(argv=None):
                         round((meta["height"] - r["cy"]) * mm_per_px, 1),
                         round(r["major"], 1), round(r["minor"], 1),
                         round(r["ratio"], 4), round(r["angle"], 1),
-                        round(r["rays"], 3)])
+                        round(r["rays"], 3),
+                        round(r["residual"] / (r["major"] / 2), 4)])
     print(f"\nwritten {args.csv}")
     return 0
 
