@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Local data
+*.db
+*.sqlite3
+data/
+
+# Footage (demo clips stay local, not in git)
+*.mp4
+*.mov
+*.mkv
+
+# Detector output
+detect-*.csv
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.env
