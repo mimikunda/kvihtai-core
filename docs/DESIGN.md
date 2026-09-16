@@ -69,12 +69,20 @@ hides real ones.
 ### What has been verified, on one clip
 
 A 5.3 s snatch, 720x1280 at 60 fps, shot on a phone at about 19 degrees off
-square. 98 % of frames measured and none interpolated, rim scatter under 0.5 %
+square. 99 % of frames measured and none interpolated, rim scatter under 0.5 %
 of the plate radius, and the major axis direction recovered as vertical, which
 is what the geometry above predicts and which was not imposed on the search.
-The frames with no measurement are one to three frames long, either where the
-hands cover too much of the rim or at the very end where the dropped bar is
-too motion-blurred to have an edge.
+The two frames with no measurement are the last of the clip, where the dropped
+bar is so motion-blurred that more than half the directions around it have no
+edge left to find.
+
+Motion blur and a wrong fit both raise the scatter of the rim points, so the
+scatter alone cannot separate them. What does is how many directions around the
+rim produced a point at all: a blurred plate still has an edge everywhere, just
+a softer one, while a fit that caught the wrong thing loses whole sectors. That
+is why the scatter limit can be loose enough to keep blurred frames without
+also keeping wrong ones, and why the diameter is read off a stricter subset so
+that loosening it cannot move the scale.
 
 Every reported frame was compared against the footage by eye. That check is not
 optional: the scatter of the rim points around the fitted ellipse measures how

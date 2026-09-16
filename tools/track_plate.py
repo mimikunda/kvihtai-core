@@ -54,12 +54,21 @@ MIN_RAY_SHARE = 0.12       # share of rays surviving the outlier trim
 # Rim scatter, as a fraction of the plate radius. Measured against a fit whose
 # radius is held fixed, which does not minimise the scatter the way a free
 # radius does, so this is looser than it would need to be for a free fit.
-MAX_RESIDUAL = 0.025
+MAX_RESIDUAL = 0.032
 # The diameter is read off the cleanest frames only. Accepting a frame and
 # trusting it to define the plate size are different jobs: a frame can be good
 # enough to report a position while still being too scattered to set the scale
 # that every other frame then inherits.
 STRICT_RESIDUAL = 0.020
+
+# Rim points must be spread around the circle, not bunched on one side. A plate
+# blurred by motion still produces a step in every direction, just a softer one,
+# so it keeps its coverage while its scatter rises; a fit that has caught the
+# wrong thing loses whole sectors. Coverage is what tells those two apart,
+# which is why the scatter limit above can be loose enough to keep blurred
+# frames without also keeping wrong ones.
+SECTORS = 12
+MIN_SECTORS = 5
 MAX_SIZE_DRIFT = 0.10      # disagreement with the set diameter
 MIN_HUB_CONTRAST = 50.0    # plate hub against plate face, see hub_contrast
 MAX_STEP_PX = 45.0         # a plate cannot move further between frames
@@ -214,6 +223,20 @@ def fit_shaped(points, theta_deg, ratio, radius=None):
     cx, cy = _resqueeze(centre, theta_deg, ratio)
     return {"cx": cx, "cy": cy, "major": 2 * r, "minor": 2 * r * ratio,
             "ratio": ratio, "angle": theta_deg, "residual": residual}
+
+
+def sector_coverage(points, fit, theta_deg, ratio):
+    """How many of SECTORS directions around the rim actually have points."""
+    circle_pts = _unsqueeze(points, theta_deg, ratio)
+    centre = _unsqueeze(np.array([[fit["cx"], fit["cy"]]], np.float32), theta_deg, ratio)[0]
+    d = circle_pts - centre
+    angles = (np.arctan2(d[:, 1], d[:, 0]) + 2 * math.pi) % (2 * math.pi)
+    occupied = 0
+    for k in range(SECTORS):
+        lo, hi = 2 * math.pi * k / SECTORS, 2 * math.pi * (k + 1) / SECTORS
+        if ((angles >= lo) & (angles < hi)).sum() >= 2:
+            occupied += 1
+    return occupied
 
 
 def trim(points, theta_deg, ratio, sigma=2.0, rounds=3):
@@ -431,12 +454,14 @@ def fit_all(video, per_frame, theta, ratio, rounds=3):
         got = fit_shaped(kept, theta, ratio, radius=radius)
         if got is not None:
             got["rays"] = len(kept) / RAYS
+            got["sectors"] = sector_coverage(kept, got, theta, ratio)
             results[i] = got
 
     for i, r in enumerate(results):
         if r is None:
             continue
         if (r["rays"] < MIN_RAY_SHARE
+                or r.get("sectors", SECTORS) < MIN_SECTORS
                 or r["residual"] / (r["major"] / 2) > MAX_RESIDUAL
                 or abs(r["major"] - 2 * radius) / (2 * radius) > MAX_SIZE_DRIFT):
             results[i] = None
@@ -514,7 +539,9 @@ def _reseed(video, results, per_frame, theta, ratio, radius, radii=None):
                     got = fit_shaped(kept, theta, ratio, radius=radius)
                     if got is not None:
                         got["rays"] = len(kept) / RAYS
+                        got["sectors"] = sector_coverage(kept, got, theta, ratio)
                         if (got["rays"] >= MIN_RAY_SHARE
+                                and got["sectors"] >= MIN_SECTORS
                                 and got["residual"] / (got["major"] / 2) <= MAX_RESIDUAL
                                 and math.hypot(got["cx"] - sx, got["cy"] - sy) <= MAX_STEP_PX
                                 and hub_contrast(field, got["cx"], got["cy"],
