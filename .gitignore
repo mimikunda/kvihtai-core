@@ -15,8 +15,8 @@ data/
 *.mov
 *.mkv
 
-# Detector output
-detect-*.csv
+# Experiment sandbox, not part of the project
+lab/
 
 # Tooling
 .pytest_cache/
