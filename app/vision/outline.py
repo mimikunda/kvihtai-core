@@ -37,6 +37,7 @@ class Face:
     angle_deg: float    # direction of the major axis
     tread_x: float = 0.0  # image of the plate's thickness: far face minus front face
     tread_y: float = 0.0
+    corrected: bool = True  # False: the axis is too uncertain to correct the bar path by
 
     @property
     def ratio(self) -> float:

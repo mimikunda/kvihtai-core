@@ -86,11 +86,13 @@ def main(argv=None):
             reasons[key] = reasons.get(key, 0) + 1
     for reason, count in sorted(reasons.items(), key=lambda kv: -kv[1]):
         print(f"  rejected        {count:4d}  {reason}")
-    print(f"camera angle      {face.camera_angle_deg:.1f} deg  (axis ratio {face.ratio:.3f}, major axis at {face.angle_deg:.0f} deg)")
+    print(f"camera angle      {face.camera_angle_deg:.1f} deg  (axis ratio {face.ratio:.3f}, major axis at {face.angle_deg:.0f} deg)"
+          + ("" if face.corrected else ", too near square to correct by"))
     k = np.array([m.mm_per_px for m in acc])
     print(f"scale             {np.median(k):.3f} mm/px  (from {k.min():.3f} to {k.max():.3f} over the set)")
     print(f"vertical travel   {pos[:, 1].max() - pos[:, 1].min():.0f} mm")
-    print(f"horizontal spread {pos[:, 0].max() - pos[:, 0].min():.0f} mm  (corrected for the camera angle)")
+    print(f"horizontal spread {pos[:, 0].max() - pos[:, 0].min():.0f} mm"
+          + ("  (corrected for the camera angle)" if face.corrected else ""))
 
     for j, mv in enumerate(reps.split(t, pos, vel), 1):
         print(f"movement {j}: {mv.start_t:.2f}-{mv.end_t:.2f} s, bar from {mv.low_mm:.0f} to {mv.high_mm:.0f} mm")

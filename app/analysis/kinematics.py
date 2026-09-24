@@ -33,6 +33,9 @@ def plane_matrix(face) -> np.ndarray:
     by the millimetres per pixel of the frame to get millimetres. y in the
     image grows downwards and 'up' is returned positive.
     """
+    flip = np.array([[1.0, 0.0], [0.0, -1.0]])  # image down -> plane up
+    if not face.corrected:
+        return flip
     t = math.radians(face.angle_deg)
     major = np.array([math.cos(t), math.sin(t)])
     minor = np.array([-math.sin(t), math.cos(t)])
@@ -41,9 +44,7 @@ def plane_matrix(face) -> np.ndarray:
     a = math.atan2(down[0], down[1])          # angle of the image's down direction after stretching
     c, s = math.cos(a), math.sin(a)
     rotate = np.array([[c, -s], [s, c]])        # puts it back to straight down
-    to_plane = rotate @ stretch
-    flip = np.array([[1.0, 0.0], [0.0, -1.0]])  # image down -> plane up
-    return flip @ to_plane
+    return flip @ rotate @ stretch
 
 
 def bar_path(measurements, face, frame_size):

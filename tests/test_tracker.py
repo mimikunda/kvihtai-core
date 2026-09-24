@@ -68,3 +68,30 @@ def test_a_ring_alone_is_not_a_plate():
     except ValueError:
         return                                   # no plate found at all: fine
     assert len(st.accepted) <= 2
+
+
+def test_a_square_view_is_left_uncorrected():
+    frames, times, _ = syn.rising_clip(n=30)
+    st = run(frames, times)
+    assert st.face.camera_angle_deg < tracker.MIN_CORRECTED_ANGLE
+    assert not st.face.corrected
+
+
+def test_an_oblique_view_is_measured_and_corrected():
+    """25 degrees off square: the face is an ellipse with its long axis upright.
+
+    Not more: from about 30 degrees the coarse stage, which looks for circles,
+    hands the fine stage a centre off by more than it can recover from. See
+    docs/DESIGN.md.
+    """
+    ratio = float(np.cos(np.radians(25.0)))
+    frames, times, _ = syn.rising_clip(n=30, ratio=ratio)
+    st = run(frames, times)
+    assert len(st.accepted) >= 27
+    assert st.face.corrected
+    assert st.face.camera_angle_deg == pytest.approx(25.0, abs=1.5)
+    t, pos = kinematics.bar_path(st.measurements, st.face, (320, 480))
+    v = kinematics.velocity(t, pos)
+    # 0.3 px a frame sideways at 60 fps and 4.5 mm a pixel, foreshortened by the ratio
+    assert np.nanmedian(v[:, 0]) == pytest.approx(0.3 * 60 * 4.5 / ratio, rel=0.05)
+    assert np.nanmedian(v[:, 1]) / 1000 == pytest.approx(1.485, rel=0.02)

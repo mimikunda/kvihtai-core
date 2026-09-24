@@ -12,7 +12,7 @@ filled in by interpolation: an interpolated position lags or runs ahead of the
 bar, which looks like a tracking error and hides a real one.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import cv2
 import numpy as np
@@ -56,6 +56,17 @@ MIN_SIMILARITY = 0.0      # see appearance.py
 # that followed the wrong thing from start to finish would agree with itself.
 # Whatever was followed must also be built like a plate, in rings.
 MIN_CONCENTRICITY = 0.15
+
+# --- the camera angle --------------------------------------------------------------
+# Near square to the plate, the face is so nearly round that the direction of
+# its axis is decided by noise: on the first test clip four quarters of the
+# set put it anywhere from 38 to 159 degrees. Correcting along a wrong axis
+# moves vertical distances, by 1.3 % on that clip, while leaving a 15 degree
+# view uncorrected costs horizontal distances 3.4 % and vertical ones nothing.
+# So the bar path is corrected only when the angle is large and the quarters agree.
+MIN_CORRECTED_ANGLE = 15.0     # degrees
+FACE_SUBSETS = 4
+MIN_AXIS_AGREEMENT = 0.9       # length of the mean of the quarters' doubled axis angles
 
 
 @dataclass
@@ -321,7 +332,13 @@ def _face(frames, fits, edges, outline, sample=LEARN_FRAMES):
         rho, _ = outline.at(phi)
         phis.append(phi)
         rel.append(np.hypot(d[:, 0], d[:, 1]) / (f.scale * rho))
-    return face_from_edges(np.concatenate(phis), np.concatenate(rel), outline)
+    face = face_from_edges(np.concatenate(phis), np.concatenate(rel), outline)
+    if face.camera_angle_deg < MIN_CORRECTED_ANGLE or len(phis) < 2 * FACE_SUBSETS:
+        return replace(face, corrected=False)
+    axes = [face_from_edges(np.concatenate(phis[k::FACE_SUBSETS]), np.concatenate(rel[k::FACE_SUBSETS]),
+                            outline).angle_deg for k in range(FACE_SUBSETS)]
+    agreement = abs(np.mean(np.exp(2j * np.radians(axes))))
+    return face if agreement >= MIN_AXIS_AGREEMENT else replace(face, corrected=False)
 
 
 def track(frames: Frames) -> SetTrack:

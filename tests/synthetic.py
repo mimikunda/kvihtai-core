@@ -97,7 +97,7 @@ def draw_ring(image, centre, radius, colour=(200, 200, 200), thickness=3.0):
 
 
 def rising_clip(n=40, size=(320, 480), radius=50.0, face=BLACK, fps=60.0, tread=None,
-                distractor=True, seed=1):
+                distractor=True, seed=1, ratio=1.0):
     """Frames of a plate rising at constant speed, and its true centres."""
     frames, centres = [], []
     for i in range(n):
@@ -105,7 +105,7 @@ def rising_clip(n=40, size=(320, 480), radius=50.0, face=BLACK, fps=60.0, tread=
         if distractor:
             draw_ring(img, (250.0, 90.0), radius)
         c = (140.0 + 0.3 * i, 380.0 - 5.5 * i)
-        draw_plate(img, c, radius, face=face, tread=tread)
+        draw_plate(img, c, radius, face=face, tread=tread, ratio=ratio)
         frames.append(img)
         centres.append(c)
     return frames, np.arange(n) / fps, centres
