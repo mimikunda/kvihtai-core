@@ -69,9 +69,17 @@ def rests(t, vel):
     return mask
 
 
-def rises(t, up_mm, v_up):
-    """Upward phases in one movement."""
+def rises(t, up_mm, v_up, start=0, end=None):
+    """Upward phases that begin between samples start and end, inclusive.
+
+    A rise is followed out to its turning points even past end: the last
+    rise of a movement slows into the rest that ends it, and cutting it at the
+    rest took the last few millimetres off its height.
+    """
+    end = len(t) - 1 if end is None else end
     rising = np.nan_to_num(v_up, nan=0.0) / 1000.0 > RISE_SPEED
+    rising[:start] = False
+    rising[end + 1:] = False
     runs = _runs(rising)
     merged = []
     for a, b in runs:
@@ -79,7 +87,7 @@ def rises(t, up_mm, v_up):
             merged[-1] = (merged[-1][0], b)
         else:
             merged.append((a, b))
-    out = []
+    spans = []
     for a, b in merged:
         # extend to the turning points either side, where the bar is lowest and highest
         lo = a
@@ -88,6 +96,14 @@ def rises(t, up_mm, v_up):
         hi = b
         while hi < len(t) - 1 and up_mm[hi + 1] > up_mm[hi]:
             hi += 1
+        # A sticking point slows the bar without stopping it: two runs of
+        # rising, the same climb between the same turning points. One rise.
+        if spans and lo < spans[-1][1]:
+            spans[-1] = (spans[-1][0], max(hi, spans[-1][1]))
+        else:
+            spans.append((lo, hi))
+    out = []
+    for lo, hi in spans:
         height = up_mm[hi] - up_mm[lo]
         if height < RISE_MIN_MM or t[hi] <= t[lo]:
             continue
@@ -111,5 +127,5 @@ def split(t, pos, vel):
             continue
         up = pos[a:b + 1, 1]
         out.append(Movement(float(t[a]), float(t[b]), float(up.min()), float(up.max()),
-                            rises(t[a:b + 1], up, vel[a:b + 1, 1])))
+                            rises(t, pos[:, 1], vel[:, 1], a, b)))
     return out
