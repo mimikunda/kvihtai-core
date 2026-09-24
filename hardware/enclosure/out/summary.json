@@ -1,0 +1,49 @@
+{
+  "base": {
+    "size_mm": [
+      91.0,
+      69.5,
+      27.35
+    ],
+    "volume_cm3": 25.13,
+    "mesh_facets": 7964
+  },
+  "lid": {
+    "size_mm": [
+      91.0,
+      69.5,
+      22.34
+    ],
+    "volume_cm3": 14.54,
+    "mesh_facets": 7306
+  },
+  "button": {
+    "size_mm": [
+      2.9,
+      5.0,
+      5.0
+    ],
+    "volume_cm3": 0.03,
+    "mesh_facets": 500
+  },
+  "params": {
+    "camera": "standard",
+    "z_bot": -6.0,
+    "z_floor": -4.0,
+    "z_li": 21.65,
+    "z_top": 23.65,
+    "z_wall": 21.349999999999998,
+    "cam_zb": 15.5,
+    "cam_x0": 26.6,
+    "lens_x": 41.0,
+    "lens_y": 11.3,
+    "x_out": [
+      -3.0,
+      88.0
+    ],
+    "y_out": [
+      -4.0,
+      65.5
+    ]
+  }
+}
