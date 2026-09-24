@@ -1,12 +1,17 @@
-"""Parametric enclosure for a Raspberry Pi 5 with Active Cooler and a Camera Module 3.
+"""Parametric enclosure for a Raspberry Pi and a Camera Module 3.
+
+Two boards: a Raspberry Pi 5 with the Active Cooler (``board="pi5"``, the
+default), and a Raspberry Pi 4 Model B with the fan of the Raspberry Pi 4 Case
+Fan (``board="pi4b"``).
 
 Run through FreeCAD, for example ``freecad.cmd build.py``. This module only builds
 geometry; build.py exports it and check.py tests it against the vendor models.
 
-All coordinates are in the frame of the Raspberry Pi 5 board, the same frame as
-Raspberry Pi's STEP model: origin at the board corner next to the USB-C
+All coordinates are in the frame of the board, the same frame as Raspberry Pi's
+STEP model of the Pi 5: origin at the board corner next to the USB-C
 connector, x along the 85 mm edge towards the USB and Ethernet ports, y along
 the 56 mm edge towards the GPIO header, z up from the underside of the PCB.
+The two boards share the outline and the mounting holes.
 
 The lid is the front face and carries the camera, looking out along +z. The
 enclosure stands on its +y face (the GPIO side), where the tripod nut is. In
@@ -22,8 +27,8 @@ V = App.Vector
 
 # --- Parts the enclosure is built around (from the vendor drawings and STEP models)
 
-PCB_TOP = 1.31                    # top face of the PCB in the vendor model
 PI_HOLES = [(3.5, 3.5), (61.5, 3.5), (3.5, 52.5), (61.5, 52.5)]
+BOARDS = ("pi5", "pi4b")
 
 # Active Cooler, read off Raspberry Pi's mechanical drawing. The drawing gives
 # 13.7 mm from the push-pin tips to the top; the tips sit below the PCB, so
@@ -52,8 +57,43 @@ M25_HEAD_D, M25_HEAD_H = 5.2, 2.7  # counterbore for DIN 912 M2.5
 M2_PILOT = 1.7
 NUT_AF, NUT_T = 11.11, 5.56       # 1/4"-20 UNC hex nut
 
+# Pi 4 only. The fan of the Raspberry Pi 4 Case Fan, taken out of its clip-in
+# housing, is an ADDA AD0205MX-K50, 25 x 25 x 6 mm. Its corner holes are taken
+# to be on the usual 20 mm square; not measured. Its leads end in female Dupont
+# housings on GPIO pins 4, 6 and 8.
+FAN_SIZE, FAN_T, FAN_HOLES = 25.0, 6.0, 20.0
+GPIO_BASE_H = 2.5                 # plastic base of the GPIO header, above the PCB
+DUPONT_H = 14.0                   # female Dupont housing, standing on that base
+PI4_LEDS = (7.9, 11.5)            # y of the power and activity LEDs, which light out of the x = 0 edge
+
+# Per board: the parts of Params that differ.
+BOARD_PARAMS = {
+    "pi5": {
+        "pcb_top": 1.31,          # top face of the PCB in the vendor model
+        "lens_x": 41.0,           # 1.5 mm left of centre, which gives the camera cable room for its loop
+        "cam_flip": False,
+        "grille": (42.3, 35.0, 11.0, 24.9),   # centre, radius, lowest y: over the blower, clear of the camera
+    },
+    "pi4b": {
+        # The Pi 4 model has 6 mm pads round the mounting holes, 0.1 mm proud of
+        # both faces of the 1.6 mm board. The board rests on them, so z = 0 is
+        # the underside of the pads and the lid posts clamp their top.
+        "pcb_top": 1.8,
+        # The Pi 4 wants the cable's contacts facing the micro-HDMI sockets. With
+        # a cable that has its contacts on the same side at both ends, that is
+        # only possible with the camera turned so its connector faces -x.
+        "cam_flip": True,
+        "lens_x": 43.5,           # the camera ends 1.2 mm short of the lid post by the audio jack
+        "fan_xy": (33.0, 37.0),   # over the SoC, clear of the camera
+        "fan_gap": 3.0,           # between the fan and the lid: room for the air it draws in
+        "lead_bend": 2.0,         # above the Dupont housings, for the fan leads to bend over
+        "grille": (33.0, 37.0, 11.0, 0.0),    # the fan's intake
+    },
+}
+
 
 class Params:
+    board = "pi5"
     camera = "standard"
 
     wall = 2.0
@@ -67,7 +107,6 @@ class Params:
     y_in = (-2.0, 63.5)           # port side clears the micro-HDMI shells; GPIO side makes room for the tripod nut
     standoff = 4.0                # floor to PCB underside
 
-    lens_x = 41.0                 # 1.5 mm left of centre, which gives the camera cable room for its loop
     lens_y = 11.3                 # as close to the Pi's camera connectors as the port wall allows
     lens_recess = 0.5
     cam_clear = 0.4               # camera connector above the cooler
@@ -81,27 +120,47 @@ class Params:
     tripod_z = 10.0
 
     def __init__(self, **kw):
+        board = kw.get("board", self.board)
+        if board not in BOARDS:
+            raise ValueError(f"unknown board {board!r}, expected one of {BOARDS}")
+        for k, v in BOARD_PARAMS[board].items():
+            setattr(self, k, v)
         for k, v in kw.items():
             setattr(self, k, v)
         self.x_out = (self.x_in[0] - self.wall, self.x_in[1] + self.wall)
         self.y_out = (self.y_in[0] - self.wall, self.y_in[1] + self.wall)
         self.z_floor = -self.standoff
         self.z_bot = self.z_floor - self.floor
-        # The camera hangs from the lid over the blower. Its connector must clear
-        # the cooler, and its lens tip sits just under the front face; that
-        # fixes the height of the lid.
         self.cam_x0 = self.lens_x - CAM_LENS[0]
-        self.cam_zb = COOLER_BODY_TOP + self.cam_clear + CAM_CONN_H
+        if self.board == "pi5":
+            # The camera hangs from the lid over the blower. Its connector must
+            # clear the cooler, and its lens tip sits just under the front face;
+            # that fixes the height of the lid.
+            self.cam_zb = COOLER_BODY_TOP + self.cam_clear + CAM_CONN_H
+        else:
+            # The fan leads on the GPIO header are the tallest thing in the box,
+            # and they fix the height of the lid. The camera hangs from it.
+            z_li = self.pcb_top + GPIO_BASE_H + DUPONT_H + self.lead_bend
+            self.cam_zb = z_li + self.lid - CAM_LENS_TIP["standard"] - self.lens_recess
         self.z_top = self.cam_zb + CAM_LENS_TIP[self.camera] + self.lens_recess
         self.z_li = self.z_top - self.lid
         self.z_wall = self.z_li - self.seam_gap
         self.x_mid = (self.x_out[0] + self.x_out[1]) / 2
 
     def cam_to_box(self, xm, ym, zm=0.0):
-        """Camera model coordinates to box coordinates (rotated 180 degrees about x)."""
+        """Camera model coordinates to box coordinates.
+
+        The model looks along -z and the box along +z, so the camera is turned
+        180 degrees about x; with cam_flip, 180 degrees about y instead, which
+        puts its cable connector on the -x side."""
+        if self.cam_flip:
+            return V(self.lens_x - (xm - CAM_LENS[0]), self.lens_y + (ym - CAM_LENS[1]), self.cam_zb - zm)
         return V(self.cam_x0 + xm, self.lens_y - (ym - CAM_LENS[1]), self.cam_zb - zm)
 
     def cam_placement(self):
+        if self.cam_flip:
+            rot = App.Rotation(V(0, 1, 0), 180)
+            return App.Placement(V(self.lens_x + CAM_LENS[0], self.lens_y - CAM_LENS[1], self.cam_zb), rot)
         rot = App.Rotation(V(1, 0, 0), 180)
         return App.Placement(V(self.cam_x0, self.lens_y + CAM_LENS[1], self.cam_zb), rot)
 
@@ -177,36 +236,55 @@ def chamfer_face_edges(shape, z, d):
 
 # --- base
 
+# Openings in the port wall: x, z, width, height, corner radius. They are sized
+# for plug overmoulds rather than the sockets, because the sockets sit about
+# 2.4 mm behind the outer face.
+PORT_WALL = {
+    "pi5": [(11.2, 2.47, 13.0, 7.4, 2.2),    # USB-C power
+            (25.8, 2.46, 11.4, 7.6, 2.0),    # micro-HDMI 0
+            (39.2, 2.46, 11.4, 7.6, 2.0)],   # micro-HDMI 1
+    "pi4b": [(11.2, 2.88, 13.0, 7.4, 2.2),
+             (26.0, 2.95, 11.4, 7.6, 2.0),
+             (39.5, 2.95, 11.4, 7.6, 2.0),
+             (54.0, 4.43, 7.8, 7.9, 1.5)],   # audio jack, which stands 2.5 mm proud of the board
+}
+
+# Shells that reach into the right wall, from the board models: y0, y1, z0, z1.
+USB_ETH_SHELLS = {
+    "pi5": [(2.28, 18.22, -0.66, 14.64),     # Ethernet
+            (13.28, 19.80, 1.38, 5.49),      # Ethernet shield finger
+            (21.75, 36.25, -0.16, 17.53),    # USB 3.0 stack
+            (39.75, 54.25, -0.17, 17.36)],   # USB 2.0 stack
+    # The Pi 4 model is lower than Raspberry Pi's drawing on the USB 2.0 stack
+    # (16.0 mm above the PCB); the taller of the two is used.
+    "pi4b": [(1.28, 16.72, -1.85, 17.70),    # USB 2.0 stack
+             (19.15, 34.85, -1.48, 18.04),   # USB 3.0 stack
+             (37.65, 53.85, -1.85, 15.35)],  # Ethernet
+}
+
+
 def usb_hdmi_cutouts(p):
-    """Openings in the port wall, sized for plug overmoulds rather than the sockets,
-    because the sockets sit about 2.4 mm behind the outer face."""
+    """Openings in the port wall."""
     y0, y1 = p.y_out[0] - 0.1, p.y_in[0] + 0.1
-    return [
-        rslot_y(11.2, 2.47, 13.0, 7.4, 2.2, y0, y1),   # USB-C power
-        rslot_y(25.8, 2.46, 11.4, 7.6, 2.0, y0, y1),   # micro-HDMI 0
-        rslot_y(39.2, 2.46, 11.4, 7.6, 2.0, y0, y1),   # micro-HDMI 1
-    ]
+    return [rslot_y(x, z, w, h, r, y0, y1) for x, z, w, h, r in PORT_WALL[p.board]]
 
 
 def usb_eth_cutouts(p):
-    """Openings round the shells that reach into the right wall, from the vendor model."""
+    """Openings round the shells that reach into the right wall."""
     c = 0.45
     x0, x1 = p.x_in[1] - 0.1, p.x_out[1] + 0.1
-    shells = [  # y0, y1, z0, z1
-        (2.28, 18.22, -0.66, 14.64),   # Ethernet
-        (13.28, 19.80, 1.38, 5.49),    # Ethernet shield finger
-        (21.75, 36.25, -0.16, 17.53),  # USB 3.0 stack
-        (39.75, 54.25, -0.17, 17.36),  # USB 2.0 stack
-    ]
     out = []
-    for y0, y1, z0, z1 in shells:
+    for y0, y1, z0, z1 in USB_ETH_SHELLS[p.board]:
         out.append(rslot_x((y0 + y1) / 2, (z0 + z1) / 2, y1 - y0 + 2 * c, z1 - z0 + 2 * c, 0.8, x0, x1))
     return out
 
 
 def left_wall_features(p):
-    """Status LED window, captive power-button pin, microSD slot."""
+    """Status LED windows, captive power-button pin (Pi 5), microSD slot."""
     x0, x1 = p.x_out[0] - 0.1, p.x_in[0] + 0.1
+    if p.board == "pi4b":
+        leds = [teardrop("x", y, 2.2, 1.1, x0, x1) for y in PI4_LEDS]
+        return leds + [box(x0, x1, 21.9, 34.3, -2.2, 0.6)]
     led = teardrop("x", 13.3, 1.84, 1.25, x0, x1)
     pin_hole = teardrop("x", 18.4, 3.04, 1.75, x0, x1)
     pin_pocket = teardrop("x", 18.4, 3.04, 2.75, BUTTON["pocket_x"], x1)
@@ -216,7 +294,7 @@ def left_wall_features(p):
 
 def vents(p):
     out = []
-    # left end, beside the heatsink fins: the blower pushes its exhaust this way
+    # left end; on the Pi 5, beside the heatsink fins, where the blower pushes its exhaust
     y = 1.5
     while y + 1.6 <= p.y_in[1] - 2.0:
         out.append(box(p.x_out[0] - 0.1, p.x_in[0] + 0.1, y, y + 1.6, 7.5, 18.5))
@@ -303,13 +381,18 @@ def lid_lip(p):
         rbox(x0 + t, x1 - t, y0 + t, y1 - t, z0 - 1, p.z_li + 1, max(r - t, 0.3)))
     # leave room for the tripod boss
     ring = ring.cut(box(p.x_mid - 8.0, p.x_mid + 8.0, 50.0, 70.0, z0 - 1, p.z_li + 1))
+    # and for the USB and Ethernet shells where they reach up to the lip (Pi 4)
+    c = 0.45
+    for y0s, y1s, _z0s, z1s in USB_ETH_SHELLS[p.board]:
+        if z1s + c > z0:
+            ring = ring.cut(box(x1 - t - 1, x1 + 1, y0s - c, y1s + c, z0 - 1, z1s + c))
     return ring
 
 
 def grille(p):
-    cx, cy, r = 42.3, 35.0, 11.0
+    cx, cy, r, y_min = p.grille
     disc = zcyl(cx, cy, r, p.z_li - 0.1, p.z_top + 0.1)
-    keep = box(cx - r, cx + r, 24.9, cy + r, p.z_li - 0.2, p.z_top + 0.2)
+    keep = box(cx - r, cx + r, max(y_min, cy - r), cy + r, p.z_li - 0.2, p.z_top + 0.2)
     slots = []
     y = cy - r + 0.3
     while y < cy + r:
@@ -353,8 +436,8 @@ def build_lid(p):
 
     # posts that clamp the Pi onto the base standoffs; M2.5 screws come in from the back
     for x, y in PI_HOLES:
-        adds.append(zcyl(x, y, p.post_r, PCB_TOP, p.z_li + 0.01))
-        cuts.append(zcyl(x, y, M25_PILOT / 2, PCB_TOP - 0.1, PCB_TOP + 14.0))
+        adds.append(zcyl(x, y, p.post_r, p.pcb_top, p.z_li + 0.01))
+        cuts.append(zcyl(x, y, M25_PILOT / 2, p.pcb_top - 0.1, p.pcb_top + 14.0))
 
     # camera standoffs, M2 screws through the camera PCB from behind
     z_front = p.cam_zb + CAM_PCB_T
@@ -369,6 +452,16 @@ def build_lid(p):
     cuts.append(Part.makeCone(lr, lr + 0.6, 0.6, V(p.lens_x, p.lens_y, p.z_top - 0.6)))
 
     cuts.append(grille(p))
+
+    if p.board == "pi4b":
+        # posts the fan is screwed to through its corner holes, M2 from the Pi side
+        cx, cy = p.fan_xy
+        z0 = p.z_li - p.fan_gap
+        for dx in (-1, 1):
+            for dy in (-1, 1):
+                x, y = cx + dx * FAN_HOLES / 2, cy + dy * FAN_HOLES / 2
+                adds.append(zcyl(x, y, 2.0, z0, p.z_li + 0.01))
+                cuts.append(zcyl(x, y, M2_PILOT / 2, z0 - 0.1, p.z_top - 0.6))
 
     # tab that keeps the tripod nut seated
     af = NUT_AF + 0.35
@@ -407,6 +500,17 @@ def build_button(p):
     return collar.fuse(shaft).removeSplitter()
 
 
+def fan_envelope(p):
+    """The fan as it sits on its posts in the lid (Pi 4)."""
+    cx, cy = p.fan_xy
+    h = FAN_SIZE / 2
+    z1 = p.z_li - p.fan_gap
+    return box(cx - h, cx + h, cy - h, cy + h, z1 - FAN_T, z1)
+
+
 def build(**kw):
     p = Params(**kw)
-    return p, {"base": build_base(p), "lid": build_lid(p), "button": build_button(p)}
+    parts = {"base": build_base(p), "lid": build_lid(p)}
+    if p.board == "pi5":
+        parts["button"] = build_button(p)
+    return p, parts

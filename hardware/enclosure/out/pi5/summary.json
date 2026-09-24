@@ -27,6 +27,7 @@
     "mesh_facets": 500
   },
   "params": {
+    "board": "pi5",
     "camera": "standard",
     "z_bot": -6.0,
     "z_floor": -4.0,
