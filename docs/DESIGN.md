@@ -11,8 +11,15 @@ Working design decisions for `kvihtai-core`. This document records what has been
 
 ## Tracking
 
-- Tracking is markerless. The camera views the lifter from the side, and the tracker follows the round weight plates.
-- A trained detection model for the plates is under consideration.
+- Tracking is markerless. The camera views the lifter from the side, and the
+  tracker follows the round weight plates.
+- Nothing in it asks what colour the plate is. Black iron plates, coloured
+  bumpers and competition plates go through the same code.
+- A trained detection model was considered because the first tracker found
+  only red plates. That reason is gone.
+
+Code: `app/vision/` (finding and measuring the plate), `app/analysis/` (bar
+path, reps, the result), `tools/track_plate.py` (runs it on a video file).
 
 ### Geometry
 
@@ -27,91 +34,201 @@ angle, and no calibration target has to be placed in the shot:
 - minor over major gives the angle, and horizontal distances are divided by
   that ratio to redraw the bar path as if the camera had stood square.
 
-The camera may therefore be placed off to the side. Precision improves as the
-angle grows, because the ratio changes with the sine of the angle: it is least
-sensitive near a square-on view, where no correction is needed anyway.
-
 The correction only holds in the plane the bar moves in. Anything nearer to or
 further from the camera has a different scale.
 
-### How the rim is measured
+Near square, the angle cannot be measured well enough to correct by. The face
+is then so nearly round that the direction of its axis is decided by noise: on
+the first test clip, four quarters of the set put it anywhere from 38 to 159
+degrees. Correcting along a wrong axis moves vertical distances, by 1.3 % on
+that clip, while leaving a 15 degree view uncorrected costs horizontal
+distances 3.4 % and vertical ones nothing. So the bar path is corrected only
+when the angle is at least 15 degrees and four quarters of the set agree on the
+axis. Both test clips are below that and are reported uncorrected.
 
-Implemented in `tools/track_plate.py`.
+A plate is not flat. Its thickness shows as a crescent of tread on the side
+facing away from the camera, and the outline in the image is the silhouette of
+a cylinder: the front face swept along the image of the thickness. The centre
+of that silhouette is off the bar by half the tread. What is on the bar is the
+centre of the front face.
 
-Three properties are constants of a set, not measurements of a frame, because
-the camera does not move and the plate does not change size: the direction of
-the major axis, the ratio between the axes, and the diameter in pixels. They
-are estimated once from all frames together, and only the position is fitted
-per frame. A free per-frame ellipse has five parameters, and a nearly circular
-plate leaves its orientation to be decided by noise, which then leaks into the
-ratio.
+### How the plate is found and measured
 
-The rim is found by casting 180 rays from the centre and locating the colour
-step along each, refined to sub-pixel with a parabola. Colour thresholds were
-tried first and abandoned: a threshold puts the boundary wherever the lighting
-crosses the chosen level, and bare skin is close enough to plate red that any
-threshold loose enough to catch the whole plate also catches the hands.
+Two stages. The coarse one only has to say roughly where the plate is; the fine
+one measures it.
 
-Two checks decide whether a frame is believed:
+**Coarse.** Every strong colour edge votes for the points one plate radius
+away along its gradient, both ways, since a plate can be darker or lighter than
+what is behind it. Each peak is scored on two things:
 
-- **hub contrast.** A plate has a metal hub, so redness is low at the centre
-  and high across the disc. A fit that has settled between the two plates on
-  the bar sits on plate material and the contrast collapses. Good fits score
-  about 90, straddling fits below 20, with nothing between.
-- **reachability.** Peak bar speed in a snatch is about 2 m/s, which is roughly
-  12 px between frames at 60 fps. A fit further than 45 px from the previous
-  one is measuring something else, usually a plate lying on the floor.
+- **coverage**, the share of directions round it with an edge at that radius.
+  A real rim is there almost all the way round, a coincidence of lines is not.
+- **concentricity**, the share of the variation inside the circle that radius
+  alone explains. A plate is rings: hub, face, rim. A loop of rope or a wheel
+  has the room behind it inside.
 
-Frames that fail are left empty rather than interpolated. An interpolated
-outline lags or runs ahead of the bar, which looks like a tracking error and
-hides real ones.
+Votes and coverage alone chose a coil of rope over the plate on the second test
+clip: static, round, the right size, and scoring steadily while the moving
+plate blurred. Concentricity is what separates them.
 
-### What has been verified, on one clip
+On a video file the path through the candidates is chosen for the whole clip at
+once: a path that no bar could travel, faster than 3 m/s scaled by the plate's
+size in pixels, is not allowed, and circles found by OpenCV's Hough transform
+on the plate that moves the furthest are anchors the path must pass through. A
+greedy frame-by-frame tracker lost the plate to static circles. On the Pi the
+live watcher, below, does this job instead.
 
-A 5.3 s snatch, 720x1280 at 60 fps, shot on a phone at about 19 degrees off
-square. 99 % of frames measured and none interpolated, rim scatter under 0.5 %
-of the plate radius, and the major axis direction recovered as vertical, which
-is what the geometry above predicts and which was not imposed on the search.
-The two frames with no measurement are the last of the clip, where the dropped
-bar is so motion-blurred that more than half the directions around it have no
-edge left to find.
+**Fine.** Edges are found along 180 rays from the centre, as the largest steps
+in Lab colour, refined to sub-pixel with a parabola. Lab, because a plate can
+differ from its background in lightness alone (black on dark clothes) or in
+hue alone (red on skin). The image is blurred in floating point before this:
+blurring in 8 bits rounds every edge to the same few levels and doubled the
+jitter.
 
-Motion blur and a wrong fit both raise the scatter of the rim points, so the
-scatter alone cannot separate them. What does is how many directions around the
-rim produced a point at all: a blurred plate still has an edge everywhere, just
-a softer one, while a fit that caught the wrong thing loses whole sectors. That
-is why the scatter limit can be loose enough to keep blurred frames without
-also keeping wrong ones, and why the diameter is read off a stricter subset so
-that loosening it cannot move the scale.
+The outline is learned once per set rather than assumed. Its radius as a
+function of direction is pooled from a sample of frames, and in each direction
+the outermost edge seen nearly as often as the most common one is taken, so it
+is the silhouette and never the face edge inside the tread. Taking whichever
+is more common let the outline switch between the two from one direction to
+the next. Per frame, only a position and a scale are fitted to that fixed
+shape, robustly, so a hand across the rim is ignored rather than averaged in.
+A free ellipse per frame lets shape and position trade against each other, and
+that trade is exactly the sideways jumping of the bar centre.
 
-Every reported frame was compared against the footage by eye. That check is not
-optional: the scatter of the rim points around the fitted ellipse measures how
-well those points agree with each other, not whether the ellipse is on the
-plate, so a fit that has settled on the wrong thing can score well. Reading a
-low scatter as a good fit was wrong twice during development, and only a
-contact sheet of every frame caught it.
+The scale is held to a running median of the frames where the rim is seen all
+the way round, over a quarter of a second. It still follows the plate towards
+and away from the camera, but a frame that sees only an arc cannot trade its
+scale against its position.
 
-Not verified: any other plate colour, gym, lighting or angle. The detector
-finds red, so blue, yellow and green plates will not be found at all. This is
-the strongest argument for a learned segmentation model, which would replace
-only the step that says which pixels are plate and leave the geometry alone.
+The front face is then recovered from the same pooled edges: it is the tread
+vector that puts the most edges where the face edge would have to be, inside
+the silhouette on the tread side. The face's centre is the bar end, its major
+axis is the 450 mm, and its axis ratio is the camera angle.
+
+Frames are accepted on four checks: edges in at least 5 of 12 directions round
+the rim, a median edge distance from the outline under 3 % of the radius, a
+scale within 5 % of the running median, and a radial brightness profile that
+correlates with the set's median profile. The whole set must also be built like
+a plate, in rings. Rejected frames are reported with the reason and never
+interpolated. A frame the coarse stage lost between two measured ones is
+looked for again between them, up to 12 frames.
+
+### What has been verified
+
+Two phone clips, both handheld, and synthetic plates.
+
+- **A 5.3 s snatch**, 720x1280 at 60 fps, red competition plates, about 13
+  degrees off square. 311 of 319 frames measured. The 8 rejected are the
+  dropped bar at the end, too blurred to recognise. Pull 1015 mm, peak 2.05 m/s.
+  The centre's frame-to-frame noise, measured as the scatter about a local
+  quadratic over five frames, is 0.15 px, against 0.19 px for the earlier
+  red-only tracker.
+- **A 6.2 s clip of three lifts**, 1440x1920 at 30 fps, about 11 degrees off
+  square. 185 of 185 frames measured. At 30 fps the plate moves up to 50 px
+  between frames and is visibly smeared, and the noise is 0.6 px.
+- **Synthetic plates** of every colour, with and without visible tread, and a
+  ring of the plate's exact size in the background. Face centre within 0.3 px,
+  scale within 1 %, velocity within 2 %.
+
+The earlier red-only tracker put the first clip at 19 degrees, this one at 13.
+Neither can be trusted at that angle, for the reason given under Geometry.
+
+Both clips were shot handheld. The camera moves by up to 38 px during them,
+zooms by 1 % and turns by 1 degree. The per-frame scale absorbs the zoom, but
+the camera's movement is in the bar path as if the bar had made it. On a tripod
+this goes away; on these clips it cannot be separated from the bar.
+
+**Oblique views have a limit.** On synthetic plates the tracker is exact to 25
+degrees off square. From 30 degrees the coarse stage, which looks for circles,
+hands the fine stage a centre off by 5 to 11 px, and at 40 degrees the camera
+angle comes out as 25. At 50 degrees nothing is found. The fine stage's
+outline learning also assumes the silhouette lies within 15 % of a circle. Both
+need work before a camera well off to the side can be supported.
+
+Verification habit: check every reported frame against the footage, as a
+contact sheet of all of them. Rim scatter says how well the edges agree with
+each other, not whether they are on the plate, and a fit on the wrong object
+scores well. Sampling a few frames hid real errors more than once.
 
 ## Capture and Lift Detection
 
-- The camera records continuously at about 80 fps into a RAM ring buffer. The oldest frames are overwritten.
-- Every 8th frame is checked for plate movement.
-- When the plate moves, real recording starts. The frames already in the ring buffer are kept as pre-roll, so the start of the lift is not lost.
-- The pre-roll must be longer than 8 frames. The exact length will be set from real footage.
-- A lift ends when the plate is back at its starting height and stationary.
-- A set can contain several lifts.
+Code: `app/capture/`, run with `tools/capture.py`, timed with
+`tools/bench_capture.py`.
+
+Three threads, and a fourth for searching:
+
+    camera      source -> ring buffer, never waits for anyone
+    watcher     ring buffer -> live tracker -> a recording per set
+    search      whole-frame search for plates, once a second while idle
+    analysis    recording -> precise stage -> result.json
+
+- **Ring buffer.** Memory is allocated once, for a fixed number of frames, and
+  the camera copies each frame into the next slot. A reader that falls behind
+  by more than the buffer loses frames, and is told so; it never gets a frame
+  that was overwritten while it was being copied.
+- **Idle.** Every second the newest frame is searched for plate-shaped circles,
+  at 360 px wide, and each becomes a watched plate. Plates on a storage tree
+  are watched too and never move. Every 8th frame each watched plate is looked
+  for where it was. A plate found 8 % of its radius away in two checks in a row
+  has started to move. A circle cut by the edge of the frame is not watched: its
+  visible part is found slightly differently each time, and on the Pi one
+  appeared to move and started a set.
+- **The rim among the rings.** The Hough transform often reports the hub or the
+  face edge. The radius used is the outermost ring round the centre with an
+  edge nearly all the way round. Not the most complete ring: a plate standing on
+  the floor loses the bottom of its rim to the floor, and the face then scores
+  higher.
+- **Pre-roll.** When a plate starts to move, the set starts one second back in
+  the ring buffer, so the start of the lift is kept.
+- **Active.** Every frame the plate is looked for in small windows along the
+  line from where it was last seen to where it would be at its last speed.
+  Only candidates a bar could have reached since are considered. A crop of
+  1.6 plate radii round it is kept; while the plate is missing, the crop covers
+  everywhere it could be, for as many frames as the analysis can bridge.
+  Searching the whole frame instead lost the plate: the votes that find a plate
+  go to the strongest edges in view, and in a whole frame of gym a blurred plate
+  is not among the peaks.
+- **End.** The set ends when the plate has been still for 3 s, lost for 2 s,
+  after 180 s, or when its crops pass 1.5 GB.
+- **Analysis.** After the set, on the crops. Live detection only decides that a
+  set is going on; how many lifts it held is decided here, from the whole bar
+  path. Rests are stretches of 0.4 s under 0.08 m/s, movements are what lies
+  between them, and a rise is a stretch of a movement going up by at least
+  100 mm. A sticking point that slows the bar without stopping it does not
+  split a rise. Each rise gets its height, mean and peak velocity.
+- **Camera settings.** Short exposure, set by hand: 2 ms at 80 fps. The phone
+  footage exposes for up to a thirtieth of a second, and the blur, not the
+  detector, is what limits it. Noise from the gain averages out in the rim fit;
+  blur does not.
+
+Live and offline agree on both clips: rises of 1016 and 715 mm live against
+1015 and 721 mm offline on the first, and about 1 % lower live on the second.
+
+Measured on the test Pi 4B, with the clip decoded into memory first:
+
+| | first clip, 720x1280, plate 158 px across | second clip, 1440x1920, 316 px |
+|---|---|---|
+| search, in its own thread | 164 ms | 85 ms |
+| check, every 8th frame | 20 ms | 51 ms |
+| follow, every frame | 13 ms, 75 fps at most | 23 ms, 44 fps at most |
+| analysis, after the set | 66 ms a frame | 134 ms a frame |
+
+Both clips played at their own rate through the whole pipeline on the Pi 4,
+decoding included, and lost no frames. The Pi 5 is expected to be two to three
+times faster.
 
 ## Open Questions
 
-- **Squats:** start and end detection differs from floor lifts. One option is to treat the whole set as one lift.
-- **Splitting a set into lifts:** proposed direction is that live detection only decides whether a set is active, and analysis after the set splits it into individual lifts. Details are not decided.
-- **Frame cropping and RAM sizing:** to be decided on real hardware.
-- **Plate colour:** detection is currently tied to red. Needed for every other
-  plate weight before this is usable in a gym.
+- **Oblique views.** Beyond about 25 degrees off square the coarse stage and the
+  outline learning need work, see above. A clip at 45 to 60 degrees is the test.
+- **Analysis time on the Pi.** At 66 to 134 ms a frame on the Pi 4, a 30 s set
+  at 80 fps takes minutes. Options: fewer rays, fewer frames for the outline, or
+  measuring every frame only where the bar moves fast.
 - **Absolute scale:** the chain is self-consistent but has never been checked
   against a length that is not part of the calculation. The bar is 2200 mm and
   is in shot, which would settle it without any new footage.
+- **Tripod footage.** Both clips are handheld, so the camera's own movement is
+  in every bar path measured so far.
+- **Naming the rises.** A snatch from the floor is one movement with two rises,
+  the pull and the stand from the catch; a squat set is one movement with a rise
+  per rep. Which rise is the lift depends on the lift, and is not decided.
