@@ -1,0 +1,9 @@
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+
+# Used by tools/, not by the app itself yet.
+numpy==2.5.3
+opencv-python-headless==5.0.0.93
+
+# Tests
+pytest==9.1.1
