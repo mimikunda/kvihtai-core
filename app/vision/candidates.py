@@ -28,6 +28,7 @@ from app.vision.edges import colour_gradient, to_lab
 
 VOTE_SHARE = 0.10      # strongest share of pixels that vote
 COVERAGE_QUANTILE = 0.85
+RIM_SHARE = 0.75       # of the most complete ring's coverage: complete enough to be the rim
 
 
 @dataclass
@@ -82,17 +83,22 @@ def peaks(acc, count, separation):
 
 def coverage(gx, gy, mag, x, y, radius, threshold, directions=48, slack=2):
     """Share of directions with a radial edge within slack pixels of the radius."""
+    return float(coverages(gx, gy, mag, x, y, [radius], threshold, directions, slack)[0])
+
+
+def coverages(gx, gy, mag, x, y, radii, threshold, directions=48, slack=2):
+    """coverage() for several radii at once."""
     th = 2 * math.pi * np.arange(directions) / directions
-    c, s = np.cos(th), np.sin(th)
-    dr = np.arange(-slack, slack + 1)
-    px = np.rint(x + (radius + dr[None, :]) * c[:, None]).astype(int)
-    py = np.rint(y + (radius + dr[None, :]) * s[:, None]).astype(int)
+    c, s = np.cos(th)[None, :, None], np.sin(th)[None, :, None]
+    r = np.asarray(radii, float)[:, None, None] + np.arange(-slack, slack + 1)[None, None, :]
+    px = np.rint(x + r * c).astype(int)
+    py = np.rint(y + r * s).astype(int)
     h, w = mag.shape
     ok = (px >= 0) & (px < w) & (py >= 0) & (py < h)
     pxc, pyc = np.clip(px, 0, w - 1), np.clip(py, 0, h - 1)
-    radial = np.abs(gx[pyc, pxc] * c[:, None] + gy[pyc, pxc] * s[:, None])
+    radial = np.abs(gx[pyc, pxc] * c + gy[pyc, pxc] * s)
     radial[~ok] = 0.0
-    return float((radial.max(axis=1) > threshold).mean())
+    return (radial.max(axis=2) > threshold).mean(axis=1)
 
 
 def concentricity(lab, x, y, radius, rings=16, directions=48):
@@ -140,6 +146,32 @@ def find_candidates(bgr, radius, count=12, window=None):
         out.append(Candidate(x + ox, y + oy, cov + max(con, -0.5)))
     out.sort(key=lambda c: -c.score)
     return out
+
+
+def rim_radius(bgr, x, y, radius, max_radius, step=1.0):
+    """The radius of the rim round (x, y), looking outwards from 0.6 radius.
+
+    A plate is rings inside rings, and the circle finder often reports the hub
+    or the edge of the face rather than the rim. The rim is the outermost ring
+    with an edge nearly all the way round. Not the most complete ring: a plate
+    standing on the floor loses the bottom of its rim to the floor and its
+    shadow, and on the first test clip the face then scored higher. And the
+    outermost, since the largest plate on the bar is the one of known size.
+    """
+    half = int(math.ceil(max_radius)) + 4
+    h, w = bgr.shape[:2]
+    x0, y0 = max(0, int(x) - half), max(0, int(y) - half)
+    patch = bgr[y0:min(h, int(y) + half + 1), x0:min(w, int(x) + half + 1)]
+    gx, gy, mag = colour_gradient(patch)
+    thr = float(np.quantile(mag, COVERAGE_QUANTILE))
+    radii = np.arange(0.6 * radius, max_radius + step / 2, step)
+    if len(radii) < 3:
+        return float(radius)
+    cov = coverages(gx, gy, mag, x - x0, y - y0, radii, thr)
+    cov = np.convolve(cov, np.ones(3) / 3, mode="same")
+    peak = (cov[1:-1] >= cov[:-2]) & (cov[1:-1] >= cov[2:]) & (cov[1:-1] >= RIM_SHARE * cov.max())
+    found = np.nonzero(peak)[0]
+    return float(radii[found[-1] + 1]) if len(found) else float(radii[int(np.argmax(cov))])
 
 
 def hough_circles(gray, min_radius, max_radius):

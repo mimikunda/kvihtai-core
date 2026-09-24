@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from app.vision import appearance
-from app.vision.candidates import Candidate, concentricity, find_candidates
+from app.vision.candidates import Candidate, concentricity, find_candidates, rim_radius
 from app.vision.edges import ray_edges, rim_patch, to_lab
 from app.vision.outline import Outline, fit_outline, learn_outline, recentre, sectors_covered
 from app.vision.path import anchor, best_path
@@ -138,6 +138,18 @@ class TestCandidates:
         syn.draw_ring(img, (220.0, 100.0), 45.0)
         best = find_candidates(img, 45.0)[0]
         assert math.hypot(best.x - 80, best.y - 100) < 3
+
+    def test_the_rim_is_found_from_the_hub(self):
+        img = syn.textured_background((240, 240))
+        syn.draw_plate(img, (120.0, 120.0), 60.0, face=syn.BLUE)
+        # starting from the hub's radius, as the circle finder often reports it
+        assert rim_radius(img, 120.0, 120.0, 0.38 * 60.0, 90.0) == pytest.approx(60.0, abs=2.0)
+
+    def test_the_rim_is_found_on_a_plate_standing_on_the_floor(self):
+        img = syn.textured_background((240, 240))
+        syn.draw_plate(img, (120.0, 120.0), 60.0, face=syn.BLACK)
+        img[int(120 + 0.85 * 60):] = (70, 75, 80)         # the floor hides the bottom of the rim
+        assert rim_radius(img, 120.0, 120.0, 0.38 * 60.0, 90.0) == pytest.approx(60.0, abs=2.0)
 
 
 class TestPath:
