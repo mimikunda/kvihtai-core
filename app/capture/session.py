@@ -1,0 +1,142 @@
+"""A capture session: camera, ring buffer, watcher and analysis, running together.
+
+    camera thread     source -> ring buffer, never waiting for anyone
+    watcher thread    ring buffer -> live tracker -> a recording per set
+    analysis thread   recording -> app.vision tracker -> result JSON on disk
+
+The analysis gets its own thread so that a set being analysed does not stop
+the next one from being noticed. Results go to out_dir/<start time>/result.json.
+"""
+
+import json
+import os
+import queue
+import threading
+import time
+from datetime import datetime, timezone
+
+import numpy as np
+
+from app.analysis.report import summarise
+from app.capture.live import LiveConfig, LiveTracker
+from app.capture.ring import RingBuffer
+from app.vision import tracker
+from app.vision.frames import Crops
+
+
+def analyse(rec):
+    """A live recording to a result dict; None if nothing could be measured."""
+    if len(rec.times) < 10:
+        return None
+    frames = Crops(rec.crops, rec.origins, rec.times, rec.frame_size)
+    st = tracker.measure(frames, rec.centres, rec.radius)
+    if not st.accepted:
+        return None
+    started = datetime.fromtimestamp(rec.started_wall, timezone.utc).isoformat(timespec="seconds")
+    return summarise(st, frame_count=len(rec.times), started_at=started,
+                     extra={"ended": rec.ended, "lost_frames": rec.lost_frames,
+                            "origin": "image centre, y up, in the plane of the bar"})
+
+
+class Session:
+    def __init__(self, source, out_dir, ring_seconds=3.0, config: LiveConfig | None = None,
+                 keep_frames=False, log=print):
+        self.source = source
+        self.out_dir = out_dir
+        self.ring_seconds = ring_seconds
+        self.config = config or LiveConfig()
+        self.keep_frames = keep_frames
+        self.log = log
+        self.results = []
+        self.frames_in = 0
+        self._stop = threading.Event()
+        self._sets = queue.Queue()
+        self.ring = None
+        self.live = None
+
+    def stop(self):
+        self._stop.set()
+
+    def _camera(self):
+        try:
+            while not self._stop.is_set():
+                frame = self.source.read()
+                if frame is None:
+                    break
+                self.ring.push(frame.image, frame.t)
+                self.frames_in += 1
+        finally:
+            self.ring.close()
+
+    def _analyser(self):
+        while True:
+            rec = self._sets.get()
+            if rec is None:
+                return
+            t0 = time.monotonic()
+            try:
+                result = analyse(rec)
+            except Exception as e:          # a bad set must not take the session down
+                self.log(f"analysis failed: {e!r}")
+                continue
+            if result is None:
+                self.log("set discarded: no plate could be measured")
+                continue
+            result["analysis_s"] = round(time.monotonic() - t0, 2)
+            self._save(rec, result)
+            self.results.append(result)
+            rises = [r for mv in result["movements"] for r in mv["rises"]]
+            self.log(f"set analysed in {result['analysis_s']} s: {result['measured']}/{result['frames']} "
+                     f"frames measured, {len(rises)} rises" +
+                     "".join(f"\n  rise {r['height_mm']:.0f} mm, mean {r['mean_concentric_velocity_mps']:.2f} "
+                             f"m/s, peak {r['peak_velocity_mps']:.2f} m/s" for r in rises))
+
+    def _save(self, rec, result):
+        stamp = datetime.fromtimestamp(rec.started_wall).strftime("%Y%m%d-%H%M%S")
+        directory = os.path.join(self.out_dir, stamp)
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, "result.json"), "w") as fh:
+            json.dump(result, fh, indent=1)
+        if self.keep_frames:
+            # crops differ in size at the frame's edge, so they are kept one by one
+            np.savez_compressed(os.path.join(directory, "frames.npz"),
+                                times=np.array(rec.times), origins=np.array(rec.origins),
+                                radius=rec.radius, frame_size=np.array(rec.frame_size),
+                                **{f"crop{i:05d}": c for i, c in enumerate(rec.crops)})
+        result["path"] = directory
+
+    def run(self, duration_s=None):
+        """Run until the source ends, duration_s passes, or stop() is called."""
+        self.source.start()
+        first = self.source.read()
+        if first is None:
+            raise OSError("the source gave no frames")
+        h, w = first.image.shape[:2]
+        fps = getattr(self.source, "fps", 30.0) or 30.0
+        capacity = max(16, int(self.ring_seconds * fps))
+        self.ring = RingBuffer(capacity, first.image.shape, first.image.dtype)
+        self.ring.push(first.image, first.t)
+        self.log(f"camera {w}x{h} at {fps:.0f} fps; ring buffer {capacity} frames, "
+                 f"{self.ring.nbytes / 1e6:.0f} MB")
+        self.live = LiveTracker(self.ring, (w, h), self.config, on_set=self._sets.put, log=self.log)
+        threads = [threading.Thread(target=self._camera, name="camera", daemon=True),
+                   threading.Thread(target=self.live.run, args=(self._stop,), name="watcher", daemon=True),
+                   threading.Thread(target=self._analyser, name="analysis", daemon=True)]
+        for th in threads:
+            th.start()
+        started = time.monotonic()
+        try:
+            while threads[0].is_alive() or threads[1].is_alive():
+                if duration_s is not None and time.monotonic() - started > duration_s:
+                    break
+                time.sleep(0.1)
+        except KeyboardInterrupt:
+            self.log("stopping")
+        finally:
+            self._stop.set()
+            threads[0].join(timeout=2)
+            threads[1].join(timeout=5)
+            self._sets.put(None)
+            threads[2].join()
+            self.source.stop()
+        return self.results
