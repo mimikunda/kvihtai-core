@@ -1,0 +1,23 @@
+[Unit]
+Description=KvihtAI Edge CV Daemon
+After=network.target
+
+[Service]
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/kvihtai-core
+Environment="PATH=/home/pi/kvihtai-core/.venv/bin"
+EnvironmentFile=-/home/pi/kvihtai-core/.env
+
+ExecStart=/home/pi/kvihtai-core/.venv/bin/gunicorn app.main:app -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8080
+
+Restart=always
+RestartSec=3
+
+# Resource Guardrails for Raspberry Pi 5
+MemoryHigh=1500M
+MemoryMax=2000M
+CPUWeight=90
+
+[Install]
+WantedBy=multi-user.target

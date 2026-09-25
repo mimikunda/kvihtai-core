@@ -1,17 +1,19 @@
-"""Application settings.
+"""Application settings and environment configuration."""
 
-Server binding lives in `run.sh`, not here. This holds only what the
-application itself needs. Kept dependency-free on purpose: the daemon runs on
-constrained edge hardware.
-"""
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from dataclasses import dataclass
-
-
-@dataclass(frozen=True)
-class Settings:
+class Settings(BaseSettings):
     app_name: str = "KvihtAI Core"
-    version: str = "0.0.0"
-
+    version: str = "0.1.0"
+    
+    # Network Binding
+    host: str = "0.0.0.0"
+    port: int = 8080
+    
+    # Hardware limits & config
+    camera_device: str = "/dev/video0"
+    target_fps: int = 60
+    
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 settings = Settings()

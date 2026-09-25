@@ -4,8 +4,8 @@ The networking layer lives under `app.api` only.
 """
 
 from fastapi import APIRouter
-
-from app.api.routes import health
+from app.api.routes import health, sets
 
 api_router = APIRouter()
 api_router.include_router(health.router)
+api_router.include_router(sets.router)
