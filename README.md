@@ -39,3 +39,6 @@ Edge computer vision engine and kinematic analysis daemon for real-time barbell 
 ---
 
 > **Note:** This project is in active early-stage development (WIP). Tracking pipelines, model weights, and API schemas are subject to breaking changes. Setup guides, benchmarks, and installation instructions will be published as stable milestones are reached.
+
+For the current Raspberry Pi setup and a list of what is and is not working,
+see [docs/RASPBERRY_PI.md](docs/RASPBERRY_PI.md).
