@@ -1,0 +1,41 @@
+{
+  "base": {
+    "size_mm": [
+      91.0,
+      69.5,
+      26.0
+    ],
+    "volume_cm3": 23.88,
+    "mesh_facets": 7896
+  },
+  "lid": {
+    "size_mm": [
+      91.0,
+      69.5,
+      20.5
+    ],
+    "volume_cm3": 14.41,
+    "mesh_facets": 9378
+  },
+  "params": {
+    "board": "pi4b",
+    "camera": "standard",
+    "z_bot": -6.0,
+    "z_floor": -4.0,
+    "z_li": 20.3,
+    "z_top": 22.3,
+    "z_wall": 20.0,
+    "cam_zb": 14.15,
+    "cam_x0": 29.1,
+    "lens_x": 43.5,
+    "lens_y": 11.3,
+    "x_out": [
+      -3.0,
+      88.0
+    ],
+    "y_out": [
+      -4.0,
+      65.5
+    ]
+  }
+}

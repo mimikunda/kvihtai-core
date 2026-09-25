@@ -2,10 +2,12 @@
 
 Needs numpy and opencv (the core requirements). Run after check.py:
 
-    python render.py
+    python render.py                        # Pi 5
+    KVIHTAI_BOARD=pi4b python render.py     # Pi 4 Model B
 
-Writes out/render/*.png: shaded views of the assembly, an exploded view, and
-the cross-sections that check.py exported.
+Writes out/<board>/render/*.png: shaded views of the assembly, an exploded
+view, and the cross-sections that check.py exported. Names of views or
+sections on the command line render only those.
 """
 
 import json
@@ -16,12 +18,25 @@ import cv2
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CHECK = os.path.join(HERE, "out", "check")
-OUT = os.path.join(HERE, "out", "render")
+BOARD = os.environ.get("KVIHTAI_BOARD", "pi5")
+CHECK = os.path.join(HERE, "out", BOARD, "check")
+OUT = os.path.join(HERE, "out", BOARD, "render")
 
 COLORS = {  # BGR
     "base": (150, 148, 145), "lid": (185, 183, 180), "button": (60, 60, 210),
     "pi": (70, 140, 40), "camera": (60, 100, 30), "cooler": (190, 190, 195), "ribbon": (40, 150, 235),
+    "fan": (45, 45, 45), "leads": (60, 60, 200),
+}
+PARTS = ["base", "lid", "button", "pi", "cooler", "fan", "leads", "camera", "ribbon"]
+
+# What each side shows, per board
+SIDES = {
+    "pi5": {"left_end": "left end: LED, power button, microSD, vents",
+            "port_side": "port side: USB-C, 2x micro-HDMI, vents",
+            "usb_end": "right end: USB and Ethernet"},
+    "pi4b": {"left_end": "left end: LEDs, microSD, vents",
+             "port_side": "port side: USB-C, 2x micro-HDMI, audio, vents",
+             "usb_end": "right end: USB and Ethernet"},
 }
 
 
@@ -135,7 +150,7 @@ def load_scene(names, offsets=None):
 
 def draw_section(sec, axes, title, size=(1400, 700), px_per_mm=None, highlight=None):
     """Filled cross-section; axes picks the two coordinates to plot, e.g. (0, 2) for x and z."""
-    order = ["pi", "cooler", "camera", "ribbon", "button", "base", "lid"]
+    order = ["pi", "cooler", "fan", "leads", "camera", "ribbon", "button", "base", "lid"]
     pts_all = [np.array(poly)[:, axes] for n in order if n in sec["parts"] for poly in sec["parts"][n]]
     if not pts_all:
         return None
@@ -175,19 +190,26 @@ def draw_section(sec, axes, title, size=(1400, 700), px_per_mm=None, highlight=N
 
 def main():
     os.makedirs(OUT, exist_ok=True)
-    everything = ["base", "lid", "button", "pi", "cooler", "camera", "ribbon"]
+    everything = [n for n in PARTS if os.path.exists(os.path.join(CHECK, f"{n}.stl"))]
+
+    def only_of(names):
+        return [n for n in everything if n in names]
+
+    side = SIDES[BOARD]
     views = {
         "standing": (everything, {}, standing_view(), "standing on its GPIO side, as on a tripod"),
         "standing_3q": (everything, {}, standing_view(-35, 20), "standing, three-quarter view"),
         "front": (everything, {}, view_matrix(-60, 35), "assembled, front and port side"),
         "back": (everything, {}, view_matrix(120, -40), "assembled, back and USB/Ethernet end"),
         "exploded": (everything, {"lid": (0, 0, 45), "camera": (0, 0, 45), "ribbon": (0, 0, 45),
-                                  "button": (-14, 0, 0)}, view_matrix(-55, 30), "exploded"),
-        "inside": (["base", "button", "pi", "cooler"], {}, view_matrix(-70, 60), "base with the Pi, lid off"),
-        "lid_inside": (["lid", "camera", "ribbon"], {}, view_matrix(-60, -50), "lid from inside, with camera"),
-        "left_end": (everything, {}, view_matrix(180, 5), "left end: LED, power button, microSD, vents"),
-        "port_side": (everything, {}, view_matrix(-90, 5), "port side: USB-C, 2x micro-HDMI, vents"),
-        "usb_end": (everything, {}, view_matrix(0, 5), "right end: USB and Ethernet"),
+                                  "fan": (0, 0, 45), "button": (-14, 0, 0)}, view_matrix(-55, 30), "exploded"),
+        "inside": (only_of(["base", "button", "pi", "cooler", "leads"]), {}, view_matrix(-70, 60),
+                   "base with the Pi, lid off"),
+        "lid_inside": (only_of(["lid", "camera", "ribbon", "fan"]), {}, view_matrix(-60, -50),
+                       "lid from inside, with camera"),
+        "left_end": (everything, {}, view_matrix(180, 5), side["left_end"]),
+        "port_side": (everything, {}, view_matrix(-90, 5), side["port_side"]),
+        "usb_end": (everything, {}, view_matrix(0, 5), side["usb_end"]),
         "gpio_side": (everything, {}, view_matrix(90, 5), "GPIO side: tripod nut"),
     }
     only = set(sys.argv[1:])
@@ -200,18 +222,12 @@ def main():
 
     with open(os.path.join(CHECK, "sections.json")) as f:
         sections = json.load(f)
-    axes = {"x_lens": (1, 2), "x_tripod": (1, 2), "y_ribbon": (0, 2), "y_button": (0, 2),
-            "y_tripod": (0, 2), "z_ports": (0, 1)}
-    titles = {"x_lens": "section x = lens axis (y horizontal, z up)",
-              "y_ribbon": "section y = 8.5 through the camera ribbon (x horizontal, z up)",
-              "y_button": "section y = 18.4 through the power button (x horizontal, z up)",
-              "y_tripod": "section y = 60 through the tripod nut (x horizontal, z up)",
-              "z_ports": "section z = 3 through the ports (x horizontal, y up)",
-              "x_tripod": "section x = tripod axis (y horizontal, z up)"}
+    # the two coordinates that stay in the plane of each section
+    axes = {0: (1, 2), 1: (0, 2), 2: (0, 1)}
     for key, sec in sections.items():
         if only and key not in only:
             continue
-        img = draw_section(sec, axes[key], titles[key])
+        img = draw_section(sec, axes[sec["normal"].index(1)], sec["title"])
         if img is not None:
             cv2.imwrite(os.path.join(OUT, f"section_{key}.png"), img)
             print("wrote section", key, flush=True)

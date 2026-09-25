@@ -1,10 +1,11 @@
 """Build the enclosure and export it. Run with ``freecad.cmd build.py``.
 
-Writes to out/: one STEP per part and enclosure.FCStd with all parts in their
-assembled positions, and to out/print/: one STL per part turned the way it
-prints, plus enclosure.3mf with all three on one Core One plate and the
-settings they need. Set KVIHTAI_CAMERA=wide for the wide-angle Camera Module 3,
-which needs a taller lid.
+Set KVIHTAI_BOARD=pi4b for the Raspberry Pi 4 Model B; the default is the Pi 5.
+Writes to out/<board>/: one STEP per part and enclosure.FCStd with all parts in
+their assembled positions, and to out/<board>/print/: one STL per part turned
+the way it prints, plus enclosure.3mf with all parts on one Core One plate and
+the settings they need. Set KVIHTAI_CAMERA=wide for the wide-angle Camera
+Module 3, which needs a taller lid.
 """
 
 import json
@@ -21,7 +22,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import enclosure  # noqa: E402
 
-OUT = os.path.join(HERE, "out")
+BOARD = os.environ.get("KVIHTAI_BOARD", "pi5")
+OUT = os.path.join(HERE, "out", BOARD)
 
 
 # How each part lies on the print bed: base on its back, lid on its front face,
@@ -122,12 +124,12 @@ def export(p, parts):
         os.remove(fcstd)            # saveAs would leave an .FCBak behind
     doc.saveAs(fcstd)
     summary["params"] = {k: getattr(p, k) for k in
-                         ("camera", "z_bot", "z_floor", "z_li", "z_top", "z_wall", "cam_zb", "cam_x0",
+                         ("board", "camera", "z_bot", "z_floor", "z_li", "z_top", "z_wall", "cam_zb", "cam_x0",
                           "lens_x", "lens_y", "x_out", "y_out")}
     with open(os.path.join(OUT, "summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
     print(json.dumps(summary, indent=2))
 
 
-p, parts = enclosure.build(camera=os.environ.get("KVIHTAI_CAMERA", "standard"))
+p, parts = enclosure.build(board=BOARD, camera=os.environ.get("KVIHTAI_CAMERA", "standard"))
 export(p, parts)
