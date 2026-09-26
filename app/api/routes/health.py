@@ -1,4 +1,4 @@
-"""Liveness endpoint. The only route implemented so far."""
+"""Liveness endpoint."""
 
 from fastapi import APIRouter
 
