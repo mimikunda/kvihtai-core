@@ -167,7 +167,7 @@ Three threads, and a fourth for searching:
   by more than the buffer loses frames, and is told so; it never gets a frame
   that was overwritten while it was being copied.
 - **Idle.** Every second the newest frame is searched for plate-shaped circles,
-  at 360 px wide, and each becomes a watched plate. Plates on a storage tree
+  reduced to 360 px on its short side, and each becomes a watched plate. Plates on a storage tree
   are watched too and never move. Every 8th frame each watched plate is looked
   for where it was. A plate found 8 % of its radius away in two checks in a row
   has started to move. A circle cut by the edge of the frame is not watched: its
@@ -188,6 +188,12 @@ Three threads, and a fourth for searching:
   Searching the whole frame instead lost the plate: the votes that find a plate
   go to the strongest edges in view, and in a whole frame of gym a blurred plate
   is not among the peaks.
+- **Detail.** Checks and following look for the plate at no more than 40 px
+  radius in the reduced image, which is where both test clips had it. On the
+  Pi's landscape frame a near plate would otherwise be twice that area: on a
+  synthetic 1536x864 clip with a plate 220 px across, following took 17 ms a
+  frame on the Pi 4 without the cap and 15.5 ms with it, against 16.7 ms
+  between frames at 60 fps.
 - **End.** The set ends when the plate has been still for 3 s, lost for 2 s,
   after 180 s, or when its crops pass 1.5 GB.
 - **Analysis.** After the set, on the crops. Live detection only decides that a
@@ -196,10 +202,11 @@ Three threads, and a fourth for searching:
   between them, and a rise is a stretch of a movement going up by at least
   100 mm. A sticking point that slows the bar without stopping it does not
   split a rise. Each rise gets its height, mean and peak velocity.
-- **Camera settings.** Short exposure, set by hand: 2 ms at 80 fps. The phone
-  footage exposes for up to a thirtieth of a second, and the blur, not the
-  detector, is what limits it. Noise from the gain averages out in the rim fit;
-  blur does not.
+- **Camera settings.** Short exposure, set by hand: 2 ms. The phone footage
+  exposes for up to a thirtieth of a second, and the blur, not the detector, is
+  what limits it. Noise from the gain averages out in the rim fit; blur does
+  not. The frame rate is 60 fps, not 80, because the station records every
+  frame, see Station below.
 
 Live and offline agree on both clips: rises of 1016 and 715 mm live against
 1015 and 721 mm offline on the first, and about 1 % lower live on the second.
@@ -217,13 +224,71 @@ Both clips played at their own rate through the whole pipeline on the Pi 4,
 decoding included, and lost no frames. The Pi 5 is expected to be two to three
 times faster.
 
+## Station
+
+Code: `app/station.py`, `app/capture/recorder.py`, `app/capture/worker.py`,
+`deploy/`. The web app is the separate `kvihtai-web` repository, built and
+served by the API at `/`.
+
+The station is the API process with the capture session running inside it.
+One process, because the camera belongs to one process, and the app needs to
+see what the camera sees and change its settings while it runs. It starts at
+boot as a systemd service, and a camera that fails is opened again.
+
+- **Recording.** Everything the camera sees is recorded, not only the sets.
+  The sets the watcher misses are the ones most worth having for improving it.
+  The Pi's hardware H.264 encoder takes the same frames as the tracker, at
+  12 Mbit/s, about 5 GB an hour. Segments are 5 minutes of fragmented MP4, so
+  that pulling the plug loses a fragment, not the file, and a JSON file beside
+  each holds the sensor time of its first frame, its keyframes and how the
+  camera was turned. The oldest segments are deleted only when less than 5 GB
+  is free.
+- **60 fps.** On the Pi 4B the encoder and the copy of each frame into the ring
+  buffer compete for memory. At 80 fps with the encoder running, 45 of the 80
+  frames a second reached the ring; copying straight from the camera's buffer
+  instead of through an extra array raised that to 67. At 60 fps all of them
+  do, with 1 to 4 % lost while the app's camera preview is open.
+- **A clip per set.** When a set ends, the segment is closed at the next
+  keyframe, and the set is cut out of it without re-encoding, from the keyframe
+  before it. Keyframes are every half second. The clip carries the camera's
+  rotation as metadata, and the app draws the measured path over it.
+- **Analysis in a process of its own.** In a thread, the analysis held the
+  interpreter's lock long enough that a set played on the Pi while the one
+  before it was being analysed lost more than half of its frames. The crops go
+  to the worker one at a time and are dropped as they go, so a set is never in
+  memory twice. The worker runs at a lower priority.
+- **Turned cameras.** The enclosure stands the camera on its side. The live
+  stage does not care which way is up, so frames are kept as the camera gives
+  them, and only a set's crops, their positions and the live centres are turned
+  upright before the analysis, which needs to know where gravity points.
+- **Light.** The exposure stays at what was set; the gain follows the light
+  between sets, towards a median brightness of 110, and is never changed during
+  a set.
+- **Sets with no rise.** A plate that moved without being lifted, knocked or
+  carried past, is analysed, kept on disk, and left out of the app.
+- **Time.** At the gym the Pi has no internet and no clock of its own, and wakes
+  at whatever time it was switched off. The app sends the phone's time when it
+  connects, and the station sets the system clock from it when it has no NTP.
+- **Network.** At boot the Pi waits 40 s for a Wi-Fi it knows. If none comes,
+  it opens its own hotspot, `KvihtAI`, and the station is at
+  `http://10.42.0.1:8080`. Waiting first matters: an access point is always
+  available to NetworkManager, and would win over the home Wi-Fi.
+
 ## Open Questions
 
 - **Oblique views.** Beyond about 25 degrees off square the coarse stage and the
   outline learning need work, see above. A clip at 45 to 60 degrees is the test.
 - **Analysis time on the Pi.** At 66 to 134 ms a frame on the Pi 4, a 30 s set
-  at 80 fps takes minutes. Options: fewer rays, fewer frames for the outline, or
-  measuring every frame only where the bar moves fast.
+  at 60 fps takes minutes; a 4.5 s set took 28 s in the station. About half of
+  a short set's time is learning the outline, which is the same for any
+  length. Options: fewer rays, fewer frames for the outline, measuring every
+  frame only where the bar moves fast, or spreading the frames over the Pi's
+  idle cores.
+- **Following at 60 fps on a Pi 4.** With a plate near the camera the watcher
+  needs nearly all of the 16.7 ms between frames, and falls behind when
+  anything else runs. The 4 s ring buffer absorbs that for a while; a long set
+  may still lose frames, and each set reports how many. The Pi 5 should not
+  have this problem.
 - **Absolute scale:** the chain is self-consistent but has never been checked
   against a length that is not part of the calculation. The bar is 2200 mm and
   is in shot, which would settle it without any new footage.
