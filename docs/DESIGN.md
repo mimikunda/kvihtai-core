@@ -237,8 +237,9 @@ boot as a systemd service, and a camera that fails is opened again.
 
 - **Recording.** Everything the camera sees is recorded, not only the sets.
   The sets the watcher misses are the ones most worth having for improving it.
-  The Pi's hardware H.264 encoder takes the same frames as the tracker, at
-  12 Mbit/s, about 5 GB an hour. Segments are 5 minutes of fragmented MP4, so
+  The Pi's hardware H.264 encoder takes the same frames as the tracker. It is
+  asked for 12 Mbit/s, about 5 GB an hour, but in a dark room at full gain the
+  noise took it to 24 Mbit/s, 11 GB an hour. Segments are 5 minutes of fragmented MP4, so
   that pulling the plug loses a fragment, not the file, and a JSON file beside
   each holds the sensor time of its first frame, its keyframes and how the
   camera was turned. The oldest segments are deleted only when less than 5 GB

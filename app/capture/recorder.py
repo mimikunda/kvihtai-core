@@ -5,7 +5,7 @@ those are only on file if everything is recorded, not only what the watcher
 recognised. So the camera is recorded for as long as it runs.
 
 The Pi's hardware H.264 encoder takes the same frames the tracker sees, at
-full rate, for almost no CPU: 1536x864 at 80 fps kept up on the Pi 4B. The
+full rate, for almost no CPU: 1536x864 at 60 fps keeps up on the Pi 4B. The
 stream is cut into segments of a few minutes, and a segment is also closed
 right after a set ends, so that the set's clip can be cut from a finished
 file within seconds.

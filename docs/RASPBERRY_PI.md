@@ -114,8 +114,9 @@ of the recordings made before the phone connected are off.
 Under `~/kvihtai-data`:
 
 - `recordings/`: everything the camera saw, in 5 minute segments of MP4, each
-  with a JSON file beside it. About 5 GB an hour. The oldest are deleted only
-  when less than 5 GB is free.
+  with a JSON file beside it. 5 to 11 GB an hour, more in poor light, where
+  the gain's noise is hard to compress. The oldest are deleted only when less
+  than 5 GB is free.
 - `sets/<start time>/`: each set's `result.json` and `clip.mp4`.
 - `kvihtai.db`: the sets the app shows.
 - `camera.json`: rotation, exposure, gain and focus, as last set in the app.
