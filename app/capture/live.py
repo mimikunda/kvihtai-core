@@ -32,7 +32,8 @@ from app.vision.tracker import MAX_RESEED_GAP
 
 @dataclass
 class LiveConfig:
-    work_width: int = 360          # reduced width for all live searching
+    work_side: int = 360           # all live searching runs on frames reduced to this short side
+    plate_px: float = 40.0         # and a plate is looked for no larger than this radius in them
     check_every: int = 8           # frames between checks while idle
     search_every_s: float = 1.0    # full-frame search for plates while idle
     min_score: float = 1.0         # coverage + concentricity a watched plate needs
@@ -71,17 +72,25 @@ class SetRecording:
     lost_frames: int = 0
     started_wall: float = 0.0
     ended: str = ""
+    quarter_turns: int = 0         # how the camera stood, see app.capture.session
 
 
 class LiveTracker:
-    def __init__(self, ring, frame_size, config: LiveConfig | None = None, on_set=None, log=print):
+    def __init__(self, ring, frame_size, config: LiveConfig | None = None, on_set=None, log=print,
+                 clock=time.time):
         self.ring = ring
         self.w, self.h = frame_size
         self.cfg = config or LiveConfig()
-        self.scale = self.cfg.work_width / self.w
+        # The short side, not the width: the Pi camera is landscape unless it
+        # is turned, and at 360 across 1536 a plate would be searched for at
+        # half the resolution it gets in a portrait frame.
+        self.scale = self.cfg.work_side / min(self.w, self.h)
         self.on_set = on_set
         self.log = log
+        self.clock = clock                 # wall time, for naming sets
         self.watched: list[Watched] = []
+        self.state = "idle"                # or "active" while a set is followed
+        self.sighting = None               # (t, x, y, r) of the plate followed, while active
         self._fresh = None                 # a watch list the searcher found, not yet taken up
         self._search_due = -math.inf       # frame time of the next background search
         self._lock = threading.Lock()
@@ -101,13 +110,24 @@ class LiveTracker:
             return None
         return got[0], np.array([x0, y0], float), got[1]
 
+    def _scale_for(self, r):
+        """The reduction for looking for a plate of radius r.
+
+        No finer than puts the plate at plate_px: both test clips were verified
+        with the plate at about 40 px, and on the Pi's landscape frame a near
+        plate would otherwise be twice the area, and following it too slow to
+        keep up with 60 fps on a Pi 4.
+        """
+        return min(self.scale, self.cfg.plate_px / r)
+
     def _look(self, image, origin, r, near=None, reach=None):
         """Best candidate of radius r in a full-resolution window, in full-frame pixels."""
-        small = cv2.resize(image, None, fx=self.scale, fy=self.scale, interpolation=cv2.INTER_AREA)
-        cands = find_candidates(small, r * self.scale, count=4)
+        scale = self._scale_for(r)
+        small = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        cands = find_candidates(small, r * scale, count=4)
         best = None
         for c in cands:
-            x, y = origin[0] + c.x / self.scale, origin[1] + c.y / self.scale
+            x, y = origin[0] + c.x / scale, origin[1] + c.y / scale
             d = 0.0 if near is None else math.hypot(x - near[0], y - near[1])
             if reach is not None and d > reach:
                 continue
@@ -195,7 +215,7 @@ class LiveTracker:
         """
         cfg = self.cfg
         r = plate.r
-        rec = SetRecording(radius=r, frame_size=(self.w, self.h), started_wall=time.time())
+        rec = SetRecording(radius=r, frame_size=(self.w, self.h), started_wall=self.clock())
         seen = [(None, np.array([plate.x, plate.y]))]       # (t, centre) of sightings
         last_seen_t = None
         misses = 0
@@ -238,6 +258,7 @@ class LiveTracker:
             best = self._along(image, origin, r, aims, last_p, reach, pred)
             if best is not None and best[2] >= 0.6 * cfg.min_score:
                 centre = np.array([best[0], best[1]])
+                self.sighting = (t, best[0], best[1], r)
                 seen.append((t, centre))
                 seen = seen[-400:]
                 last_seen_t = t
@@ -281,15 +302,16 @@ class LiveTracker:
 
     def _along(self, image, origin, r, aims, last_p, reach, pred):
         """Best candidate near any of the aim points and within reach of the last sighting."""
-        small = cv2.resize(image, None, fx=self.scale, fy=self.scale, interpolation=cv2.INTER_AREA)
-        rs = r * self.scale
+        scale = self._scale_for(r)
+        small = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        rs = r * scale
         spread = r + np.hypot(*(pred - last_p))
         best = None
         for aim in aims:
-            ax, ay = (aim - origin) * self.scale
+            ax, ay = (aim - origin) * scale
             half = (self.cfg.crop_radii + 0.5) * rs
             for c in find_candidates(small, rs, count=4, window=(ax - half, ay - half, ax + half, ay + half)):
-                x, y = origin[0] + c.x / self.scale, origin[1] + c.y / self.scale
+                x, y = origin[0] + c.x / scale, origin[1] + c.y / scale
                 if math.hypot(x - last_p[0], y - last_p[1]) > reach:
                     continue
                 d = math.hypot(x - pred[0], y - pred[1])
@@ -334,6 +356,7 @@ class LiveTracker:
             moved = self.check(seq) if self.watched else None
             if moved is not None:
                 idle.clear()
+                self.state = "active"
                 fps = self._rate()
                 start = max(self.ring.oldest, seq - int(self.cfg.preroll_s * fps))
                 self.log(f"set: plate at ({moved.x:.0f}, {moved.y:.0f}) r {moved.r:.0f} moved, "
@@ -342,6 +365,7 @@ class LiveTracker:
                 self.stats["sets"] += 1
                 self.stats["lost"] += rec.lost_frames
                 self.log(f"set ended ({rec.ended}): {len(rec.times)} frames, {rec.lost_frames} lost")
+                self.state, self.sighting = "idle", None
                 if self.on_set is not None:
                     self.on_set(rec)
                 seq = self.ring.newest

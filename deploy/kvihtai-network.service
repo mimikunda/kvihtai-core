@@ -1,0 +1,14 @@
+# At boot: join a known Wi-Fi if one is in range, otherwise open the hotspot.
+# Installed by deploy/setup_pi.sh with @HOME@ filled in.
+
+[Unit]
+Description=KvihtAI: known Wi-Fi or hotspot
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash @HOME@/kvihtai-core/deploy/network.sh
+
+[Install]
+WantedBy=multi-user.target

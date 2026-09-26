@@ -1,3 +1,5 @@
+import json
+
 from app.api.schemas import SetSummary
 from app.db.database import get_connection
 
@@ -41,3 +43,47 @@ def get_latest_set() -> SetSummary | None:
         return None
 
     return _deserialize_set_summary(row["payload"])
+
+
+def save_result(set_id: str, started_at: str, result: dict) -> None:
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO results (set_id, started_at, payload)
+            VALUES (?, ?, ?)
+            ON CONFLICT(set_id) DO UPDATE SET
+                started_at = excluded.started_at,
+                payload = excluded.payload
+            """,
+            (set_id, started_at, json.dumps(result)),
+        )
+
+
+def get_result(set_id: str) -> dict | None:
+    with get_connection() as connection:
+        row = connection.execute("SELECT payload FROM results WHERE set_id = ?", (set_id,)).fetchone()
+    return None if row is None else json.loads(row["payload"])
+
+
+def list_results(limit: int = 100) -> list[dict]:
+    """The newest sets first, whole."""
+    with get_connection() as connection:
+        rows = connection.execute(
+            "SELECT payload FROM results ORDER BY started_at DESC, set_id DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return [json.loads(row["payload"]) for row in rows]
+
+
+def delete_result(set_id: str) -> bool:
+    with get_connection() as connection:
+        gone = connection.execute("DELETE FROM results WHERE set_id = ?", (set_id,)).rowcount
+        connection.execute("DELETE FROM sets WHERE set_id = ?", (set_id,))
+    return gone > 0
+
+
+def save_set_summary(data: dict) -> None:
+    """Store a set given as a plain dict in the shape of SetSummary."""
+    if hasattr(SetSummary, "model_validate"):
+        save_set(SetSummary.model_validate(data))
+    else:
+        save_set(SetSummary.parse_obj(data))

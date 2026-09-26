@@ -63,8 +63,11 @@ class RingBuffer:
             self.closed = True
             self._arrived.notify_all()
 
-    def read(self, seq, crop=None):
+    def read(self, seq, crop=None, step=1):
         """A copy of frame seq, or of a crop (x0, y0, x1, y1) of it, with its time.
+
+        step > 1 takes every step-th pixel only, for a cheap look at the whole
+        frame: a preview, or its brightness.
 
         Returns None if the frame is not there: not yet written, or already
         overwritten. The copy is checked after it is made, so a frame that was
@@ -78,10 +81,10 @@ class RingBuffer:
                 return None
             t = self._times[slot]
         if crop is None:
-            out = self._images[slot].copy()
+            out = self._images[slot, ::step, ::step].copy()
         else:
             x0, y0, x1, y1 = crop
-            out = self._images[slot, y0:y1, x0:x1].copy()
+            out = self._images[slot, y0:y1:step, x0:x1:step].copy()
         with self._lock:
             if self._seq[slot] != seq:
                 return None

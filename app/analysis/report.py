@@ -27,11 +27,14 @@ def summarise(set_track, frame_count=None, started_at=None, extra=None):
     if missing:
         rejected["not found"] = missing
     face = set_track.face
+    # where the bar end is in the picture, for drawing the path over the video
+    px = [(m.face_x, m.face_y) for m in set_track.measurements if m is not None and m.accepted]
     out = {
         "started_at": started_at,
         "frames": n,
         "measured": len(measured),
         "rejected": rejected,
+        "frame_size": list(set_track.frame_size),
         "duration_ms": round(1000 * float(t[-1] - t[0]), 1) if len(t) > 1 else 0.0,
         "camera": {
             "angle_deg": round(face.camera_angle_deg, 1),
@@ -65,8 +68,9 @@ def summarise(set_track, frame_count=None, started_at=None, extra=None):
         ],
         "trajectory": [
             {"t_ms": round(1000 * float(tt), 1), "x_mm": round(float(p[0]), 1), "y_mm": round(float(p[1]), 1),
-             "vy_mps": None if math.isnan(v[1]) else round(float(v[1]) / 1000, 3)}
-            for tt, p, v in zip(t, pos, vel)
+             "vy_mps": None if math.isnan(v[1]) else round(float(v[1]) / 1000, 3),
+             "x_px": round(float(q[0]), 1), "y_px": round(float(q[1]), 1)}
+            for tt, p, v, q in zip(t, pos, vel, px)
         ],
     }
     if extra:
