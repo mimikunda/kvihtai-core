@@ -15,6 +15,12 @@ The plates to watch are found by looking, not told: every second while idle
 the whole frame is searched for plate-shaped circles, and each is watched.
 Plates on a storage tree are watched too and never move; the one on the bar
 is the one that does.
+
+With the camera off to the side, both ends of the bar are in view and start
+to move together. The one followed is the one nearer the camera, which the
+person setting up the station tapped once in the app: near, a point on its
+side of the picture. The far plate is often the easier one to see, but the
+lifter's arms and head cover it.
 """
 
 import math
@@ -28,6 +34,10 @@ import numpy as np
 from app.vision.candidates import find_candidates, hough_circles, rim_radius
 from app.vision.plate import max_step_px
 from app.vision.tracker import MAX_RESEED_GAP
+
+
+TAP_REACH = 2.0     # plate radii round the tap searched for the near plate: the bar is set down a
+                    # little elsewhere each time
 
 
 @dataclass
@@ -89,6 +99,7 @@ class LiveTracker:
         self.log = log
         self.clock = clock                 # wall time, for naming sets
         self.watched: list[Watched] = []
+        self.near = None                   # (x, y) full-frame pixels on the near plate's side, or None
         self.state = "idle"                # or "active" while a set is followed
         self.sighting = None               # (t, x, y, r) of the plate followed, while active
         self._fresh = None                 # a watch list the searcher found, not yet taken up
@@ -168,12 +179,49 @@ class LiveTracker:
                 continue
             found.append((c.score, Watched(c.x / self.scale, c.y / self.scale, r / self.scale)))
         found.sort(key=lambda sw: -sw[0])
+        if self.near is not None:
+            tapped = self._round_the_tap(small)
+            if tapped is not None:
+                # watched whatever the others score; if the Hough transform found
+                # it too, as the same plate, the larger of the two rims is kept:
+                # round the tap the best candidate is sometimes the hub
+                t = tapped[1]
+                same = [sw for sw in found if math.hypot(sw[1].x - t.x, sw[1].y - t.y) < max(sw[1].r, t.r)]
+                if same and max(same, key=lambda sw: sw[1].r)[1].r > t.r:
+                    t = max(same, key=lambda sw: sw[1].r)[1]
+                found = [(tapped[0], t)] + [sw for sw in found if sw not in same]
         kept = []
         for _, w in found:
             if all(math.hypot(w.x - k.x, w.y - k.y) > k.r for k in kept):
                 kept.append(w)
         self.stats["searches"] += 1
         return kept[: self.cfg.max_watched]
+
+    def _round_the_tap(self, small):
+        """The best plate round the tapped point, whatever its size: (score, Watched) or None.
+
+        The near plate is the one the Hough transform most often misses: a
+        dark plate against dark tiles, where the far one stands out against a
+        white wall. On one clip only the far plate was ever watched, and a tap
+        on the near one had nothing to choose. So round the tap the coarse
+        candidates are looked for at every plate size, and the rim is found
+        from the best of them.
+        """
+        h, w = small.shape[:2]
+        nx, ny = self.near[0] * self.scale, self.near[1] * self.scale
+        best = None
+        for r in np.geomspace(0.04 * h, 0.20 * h, 6):
+            half = TAP_REACH * r
+            for c in find_candidates(small, r, count=2, window=(nx - half, ny - half, nx + half, ny + half)):
+                if best is None or c.score > best[0].score:
+                    best = (c, r)
+        if best is None or best[0].score < self.cfg.min_score:
+            return None
+        c, r = best
+        r = rim_radius(small, c.x, c.y, r, 0.20 * h)
+        if min(c.x - r, c.y - r, w - c.x - r, h - c.y - r) < 0:
+            return None
+        return c.score, Watched(c.x / self.scale, c.y / self.scale, r / self.scale)
 
     def check(self, seq):
         """Look for each watched plate near where it was. Returns the one that moved, if any."""
@@ -199,6 +247,26 @@ class LiveTracker:
                 w.x += 0.2 * (best[0] - w.x)            # follow slow drift, not a lift
                 w.y += 0.2 * (best[1] - w.y)
         return None
+
+    def near_end(self, plate: Watched) -> Watched:
+        """Of plate and the other watched plates moving with it, the one on the near side.
+
+        Both ends of the bar start to move in the same check, and plate is only
+        whichever was confirmed first. A moving plate within two radii of it is
+        the same plate seen by another of its rings, not the other end. Plates
+        after plate in the watch list were not looked at in this check, so one
+        that moved in the check before counts.
+        """
+        if self.near is None:
+            return plate
+        best = plate
+        for w in self.watched:
+            if w is best or not w.moved or math.hypot(w.x - best.x, w.y - best.y) < 2 * max(w.r, best.r):
+                continue
+            mx, my = (w.x + best.x) / 2, (w.y + best.y) / 2
+            if (w.x - best.x) * (self.near[0] - mx) + (w.y - best.y) * (self.near[1] - my) > 0:
+                best = w
+        return best
 
     # --- active -------------------------------------------------------------------
 
@@ -355,6 +423,7 @@ class LiveTracker:
                     self.watched, self._fresh = self._fresh, None
             moved = self.check(seq) if self.watched else None
             if moved is not None:
+                moved = self.near_end(moved)
                 idle.clear()
                 self.state = "active"
                 fps = self._rate()

@@ -87,7 +87,7 @@ def analyse(rec, quarter_turns=0):
 class Session:
     def __init__(self, source, out_dir, ring_seconds=3.0, config: LiveConfig | None = None,
                  keep_frames=False, log=print, on_result=None, clock=time.time, quarter_turns=0,
-                 analyser=analyse):
+                 analyser=analyse, near=None):
         self.source = source
         self.out_dir = out_dir
         self.ring_seconds = ring_seconds
@@ -106,6 +106,14 @@ class Session:
         self._sets = queue.Queue()
         self.ring = None
         self.live = None
+        self.near = near
+
+    def set_near(self, near):
+        """Where the plate nearer the camera is: (x, y) from 0 to 1 across the
+        camera's own frame, not the turned picture, or None. See app.capture.live."""
+        self.near = near
+        if self.live is not None:
+            self.live.near = None if near is None else (near[0] * (self.live.w - 1), near[1] * (self.live.h - 1))
 
     def stop(self):
         self._stop.set()
@@ -194,6 +202,7 @@ class Session:
                  f"{self.ring.nbytes / 1e6:.0f} MB")
         self.live = LiveTracker(self.ring, (w, h), self.config, on_set=self._queue, log=self.log,
                                 clock=self.clock)
+        self.set_near(self.near)
         threads = [threading.Thread(target=self._camera, name="camera", daemon=True),
                    threading.Thread(target=self.live.run, args=(self._stop,), name="watcher", daemon=True),
                    threading.Thread(target=self._analyser, name="analysis", daemon=True)]

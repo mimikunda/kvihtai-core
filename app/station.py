@@ -44,6 +44,16 @@ class CameraSettings:
     gain: float = 8.0
     auto_gain: bool = True
     lens_position: float | None = None   # dioptres; None until focused once
+    # A point on the plate nearer the camera, tapped in the app: (x, y) from 0
+    # to 1 across the camera's own frame, so that turning the picture later
+    # does not move it. None until tapped. See app.capture.live.
+    near_plate: list | None = None
+
+
+def turn_unit(x, y, quarter_turns):
+    """A point given from 0 to 1 across a frame, after turning the frame clockwise."""
+    k = quarter_turns % 4
+    return [(x, y), (1 - y, x), (1 - x, 1 - y), (y, 1 - x)][k]
 
 
 def rise_list(result):
@@ -155,7 +165,7 @@ class Station:
                 self.session = Session(self.source, self.sets_dir, ring_seconds=4.0,
                                        log=self.note, on_result=self._on_result,
                                        clock=self.now, quarter_turns=self.camera.quarter_turns,
-                                       analyser=self.analyser)
+                                       analyser=self.analyser, near=self.camera.near_plate)
                 self.error = None
                 self.note(f"camera {self.cfg.camera} starting")
                 if self.camera.lens_position is not None and hasattr(self.source, "set_controls"):
@@ -269,6 +279,13 @@ class Station:
                 self.session.quarter_turns = cam.quarter_turns
             if self.recorder is not None:
                 self.recorder.extra["quarter_turns"] = cam.quarter_turns
+        if changes.get("near_plate") is not None:
+            # given as seen in the app, upright; kept as the camera sees it
+            point = changes["near_plate"]
+            cam.near_plate = None if not point else \
+                [round(min(max(float(v), 0.0), 1.0), 4) for v in turn_unit(*point[:2], -cam.quarter_turns)]
+            if self.session is not None:
+                self.session.set_near(cam.near_plate)
         if changes.get("auto_gain") is not None:
             cam.auto_gain = bool(changes["auto_gain"])
         controls = {}
@@ -301,8 +318,11 @@ class Station:
 
     def camera_state(self):
         meta = getattr(self.source, "metadata", {}) or {}
+        near = self.camera.near_plate
         return {
             **asdict(self.camera),
+            # upright, as the app shows the picture
+            "near_plate": None if near is None else [round(v, 4) for v in turn_unit(*near, self.camera.quarter_turns)],
             "kind": self.cfg.camera,
             "exposure_actual_us": meta.get("ExposureTime"),
             "gain_actual": round(meta["AnalogueGain"], 2) if "AnalogueGain" in meta else None,

@@ -16,6 +16,9 @@ class CameraChange(BaseModel):
     exposure_us: int | None = None
     gain: float | None = None
     auto_gain: bool | None = None
+    # (x, y) from 0 to 1 across the upright picture: a tap on the plate nearer
+    # the camera. An empty list forgets it.
+    near_plate: list[float] | None = None
 
 
 class ClockReading(BaseModel):

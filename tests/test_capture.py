@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 import synthetic as syn
-from app.capture.live import LiveConfig, SetRecording
+from app.capture.live import LiveConfig, LiveTracker, SetRecording, Watched
 from app.capture.ring import RingBuffer
 from app.capture.session import Session, turn_point, turn_recording
 from app.capture.source import Frame, VideoFileSource
@@ -57,6 +57,22 @@ def test_ring_wait_ends_when_the_camera_stops():
     ring.close()
     waiter.join(timeout=1)
     assert result == [False]
+
+
+# --- which end of the bar -------------------------------------------------------------
+
+def test_the_watcher_follows_the_end_on_the_tapped_side():
+    live = LiveTracker(None, (720, 1280))
+    far = Watched(200.0, 900.0, 40.0, moved=2)            # confirmed first
+    near = Watched(480.0, 920.0, 55.0, moved=1)           # moving with it
+    hub = Watched(205.0, 905.0, 15.0, moved=1)            # the far plate's hub, not the other end
+    tree = Watched(650.0, 300.0, 50.0, moved=0)           # still
+    live.watched = [far, hub, near, tree]
+    assert live.near_end(far) is far                      # nothing tapped
+    live.near = (600.0, 1000.0)
+    assert live.near_end(far) is near
+    live.near = (50.0, 1000.0)
+    assert live.near_end(far) is far
 
 
 # --- a whole session ---------------------------------------------------------------------
