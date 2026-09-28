@@ -20,6 +20,7 @@ import numpy as np
 from app.vision import appearance
 from app.vision.candidates import concentricity, find_candidates, hough_circles
 from app.vision.edges import MAX_EDGES, ray_edges, rim_patch
+from app.vision.extent import carried_ellipse
 from app.vision.frames import Frames
 from app.vision.outline import (Face, Outline, face_from_edges, fit_outline, learn_outline,
                                 recentre, sectors_covered)
@@ -125,7 +126,19 @@ def coarse_path(frames: Frames, work_width=WORK_WIDTH):
     bar = moving_track(tracks)
     if bar is None:
         return [None] * len(frames), None
+    # The Hough transform reports whichever ring round the centre is sharpest,
+    # often a change plate or the steel disc inside the rim, and seen from an
+    # angle with its centre off the rim's. Everything below is built on this
+    # radius and these centres: the votes that find the plate in the other
+    # frames, the scale the fine stage starts from, and the millimetres per
+    # pixel. So the plate's extent is measured from what the track carried
+    # with it; see app.vision.extent.
     radius = float(np.median([p[2] for _, p in bar]))
+    extent = carried_ellipse(lambda i: _reduce(frames.image(i)[0], scale), bar, HOUGH_RADIUS[1] * h)
+    if extent is not None:
+        dx, dy, a, b, _ = extent
+        radius = 0.5 * (a + b)
+        bar = [(i, (x + dx, y + dy, radius)) for i, (x, y, _) in bar]
     candidates = [find_candidates(_reduce(frames.image(i)[0], scale), radius) for i in range(len(frames))]
     candidates = anchor(candidates, bar, radius)
     path = best_path(candidates, times, radius)
