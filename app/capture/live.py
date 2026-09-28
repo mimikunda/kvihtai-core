@@ -190,6 +190,16 @@ class LiveTracker:
                 if same and max(same, key=lambda sw: sw[1].r)[1].r > t.r:
                     t = max(same, key=lambda sw: sw[1].r)[1]
                 found = [(tapped[0], t)] + [sw for sw in found if sw not in same]
+            else:
+                # Missed this time: the candidates' scores hover round the
+                # threshold from one second to the next, and a plate dropped
+                # from the list just before the lift cannot be chosen for it.
+                # So the plate watched at the tap stays watched.
+                was = [w for w in self.watched
+                       if math.hypot(w.x - self.near[0], w.y - self.near[1]) < TAP_REACH * w.r]
+                if was:
+                    found.insert(0, (0.0, min(was, key=lambda w: math.hypot(w.x - self.near[0],
+                                                                            w.y - self.near[1]))))
         kept = []
         for _, w in found:
             if all(math.hypot(w.x - k.x, w.y - k.y) > k.r for k in kept):
