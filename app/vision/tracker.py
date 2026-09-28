@@ -19,7 +19,7 @@ import numpy as np
 
 from app.vision import appearance
 from app.vision.candidates import concentricity, find_candidates, hough_circles
-from app.vision.edges import MAX_EDGES, ray_edges, rim_patch
+from app.vision.edges import MAX_EDGES, RAYS, ray_edges, rim_patch
 from app.vision.extent import carried_ellipse
 from app.vision.frames import Frames
 from app.vision.outline import (Face, Outline, face_from_edges, fit_outline, learn_outline,
@@ -42,6 +42,17 @@ GATE = 0.04               # edges further than this from the outline take no par
 PRIOR_WEIGHT = 3.0        # pull of the smoothed scale, in rim points' worth
 SCALE_WINDOW_S = 0.25     # half-width of the running median over the scale
 MAX_RESEED_GAP = 12       # frames; longer gaps are left empty
+# Where the tread or the plates behind show, the outline has two ways to sit
+# on a frame's edges: its silhouette on the stack's silhouette, or on the front
+# face's edge a tread's width in. On the first test clip, in the catch, the
+# fit flipped between the two from one frame to the next, 12 px apart, and
+# both had a residual under 1.5 px and edges in 12 of 12 sectors. What tells
+# them apart is how much of the rim they explain: 155 to 170 of 180 rays with
+# an edge on the outline for the right one, 120 to 126 for the other. So a fit
+# that disagrees with what its neighbours predict is tried again from their
+# prediction, and whichever explains more of the rim is kept.
+AGREE = 0.02              # of the scale; closer to the prediction than this, no second try
+SUPPORT_MARGIN = 3        # rays; a second try must beat the first by more than this
 
 # The scale is read off frames with the rim in view almost all round. Accepting
 # a frame and trusting it to set the size are different jobs.
@@ -92,6 +103,7 @@ class Measurement:
     similarity: float
     accepted: bool
     reason: str = ""
+    support: float = 0.0        # share of the rays with an edge on the outline
     interior: float = 0.0       # the inside against the set's, see appearance.inside()
 
 
@@ -250,7 +262,9 @@ def measure(frames: Frames, centres, radius) -> SetTrack:
         if fit is None:
             continue
         free[i], edges[i] = fit, pts
-        if (sectors_covered(pts[fit.inliers], fit.centre) >= GOOD_SECTORS
+    _settle(frames, free, edges, outline)
+    for i, fit in free.items():
+        if (sectors_covered(edges[i][fit.inliers], fit.centre) >= GOOD_SECTORS
                 and fit.residual() <= GOOD_RESIDUAL * fit.scale):
             good.append(i)
     scales = {i: f.scale for i, f in free.items()}
@@ -327,8 +341,44 @@ def measure(frames: Frames, centres, radius) -> SetTrack:
             mm_per_px=PLATE_DIAMETER_MM / (face.major * float(scale_t[i])),
             residual=f.residual(), sectors=sectors, similarity=sim,
             accepted=not reason, reason=reason,
+            support=_support(f, edges[i]) / RAYS,
             interior=appearance.travels_with(insides[i], inside_ref))
     return SetTrack(outline, measurements, frames.frame_size, radius, edges)
+
+
+def _support(fit, pts):
+    """How many of the rays saw an edge on the outline where this fit put it."""
+    near = np.abs(fit.residuals) <= GATE * fit.scale
+    return sectors_covered(pts[near], fit.centre, sectors=RAYS)
+
+
+def _settle(frames, fits, edges, outline, passes=2):
+    """Try each fit again from where its neighbours put the plate; keep the better.
+
+    Forward, the prediction is the last two fits carried on at their speed;
+    backward, the next two. A fit already where the prediction is costs
+    nothing. Changes fits and edges in place.
+    """
+    keys = sorted(fits)
+    for p in range(passes):
+        order = keys if p % 2 == 0 else keys[::-1]
+        step = 1 if p % 2 == 0 else -1
+        changed = 0
+        for i in order:
+            a, b = fits.get(i - step), fits.get(i - 2 * step)
+            if a is None:
+                continue
+            pred = a.centre if b is None else 2 * a.centre - b.centre
+            f = fits[i]
+            if np.hypot(*(f.centre - pred)) <= AGREE * f.scale:
+                continue
+            pts = _edges(frames, i, pred, a.scale, outline, BAND)
+            g = fit_outline(pts, outline, pred, a.scale, gate=GATE)
+            if g is not None and _support(g, pts) > _support(f, edges[i]) + SUPPORT_MARGIN:
+                fits[i], edges[i] = g, pts
+                changed += 1
+        if not changed and p > 0:
+            break
 
 
 def _carries_its_face(frames, fits, keys, sample=15):
