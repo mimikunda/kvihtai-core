@@ -51,6 +51,82 @@ def moving_track(tracks, min_length=4):
     return max(long_enough, key=lambda t: travel(t) * len(t))
 
 
+def other_end(detections, track, away=2.0, cluster=0.5, member=0.6, min_seen=4, min_share=0.1,
+              min_travel=0.5):
+    """The plate on the bar's other end, as a track like the followed one.
+
+    A bar is rigid, so the plate on its far end keeps nearly the same place
+    relative to the followed one while the bar goes up and down. Circles more
+    than away radii from the track are taken as offsets from it, and the
+    offset with the most others within cluster radii of it is the other end.
+    Each frame contributes the circle nearest the cluster's median offset, if
+    it is within member radii of it. Returns [(frame, (x, y, r))], or None if
+    the other end was seen in fewer than min_seen frames, or in less than
+    min_share of the track's. Seen square from the side, the far plate hides
+    behind the near one; what clusters then is a knee or a plate on a tree
+    behind, found in 4 to 8 % of the frames, where the far plate of an
+    oblique view is found in 15 % or more. And it must travel at least
+    min_travel as far as the track does over the same frames.
+
+    The offset is not constant: it turns as the bar tilts and as the view of
+    it changes, by up to a radius over a lift. So only the frames in which the
+    other end was actually seen are returned, never the followed track moved
+    by an offset.
+    """
+    at = dict(track)
+    radius = sorted(p[2] for _, p in track)[len(track) // 2]
+    offsets = [(i, x - at[i][0], y - at[i][1], r) for i, circles in detections if i in at
+               for x, y, r in circles if math.hypot(x - at[i][0], y - at[i][1]) > away * radius]
+    if len(offsets) < min_seen:
+        return None
+
+    def around(dx, dy, reach):
+        return [o for o in offsets if math.hypot(o[1] - dx, o[2] - dy) <= reach * radius]
+
+    def travel(points):
+        xs, ys = [p[0] for p in points], [p[1] for p in points]
+        return math.hypot(max(xs) - min(xs), max(ys) - min(ys))
+    # A plate lying still while the bar rests before the lift also keeps a
+    # steady offset, and for as long as the bar rests. Seen where it was, it
+    # has not moved; the other end moves as far as the followed one.
+    while len(offsets) >= min_seen:
+        densest = max(offsets, key=lambda o: len(around(o[1], o[2], cluster)))
+        near = around(densest[1], densest[2], member)
+        mx = sorted(o[1] for o in near)[len(near) // 2]
+        my = sorted(o[2] for o in near)[len(near) // 2]
+        seen = {}
+        for i, dx, dy, r in around(mx, my, member):
+            d = math.hypot(dx - mx, dy - my)
+            if i not in seen or d < seen[i][0]:
+                seen[i] = (d, (at[i][0] + dx, at[i][1] + dy, r))
+        if len(seen) < max(min_seen, min_share * len(track)):
+            return None
+        if travel([p for _, p in seen.values()]) >= min_travel * travel([at[i] for i in seen]):
+            return [(i, seen[i][1]) for i in sorted(seen)]
+        offsets = [o for o in offsets if o not in near]
+    return None
+
+
+def nearer(track, other, point):
+    """Whether track, not other, is the end of the bar on point's side.
+
+    point is anywhere on the side of the plate nearer the camera: a tap on
+    it, or the edge of the picture it is on. In each frame both ends were
+    seen, the bar's direction from other to track is compared with the
+    direction from the bar's middle to the point; the median decides.
+    """
+    at = dict(other)
+    votes = []
+    for i, (x, y, _) in track:
+        if i in at:
+            ox, oy, _ = at[i]
+            mx, my = (x + ox) / 2, (y + oy) / 2
+            votes.append((x - ox) * (point[0] - mx) + (y - oy) * (point[1] - my))
+    if not votes:
+        return True
+    return sorted(votes)[len(votes) // 2] >= 0
+
+
 ANCHOR_BONUS = 10.0     # more than any run of skipped frames could save
 
 

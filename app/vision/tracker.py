@@ -24,13 +24,19 @@ from app.vision.extent import carried_ellipse
 from app.vision.frames import Frames
 from app.vision.outline import (Face, Outline, face_from_edges, fit_outline, learn_outline,
                                 recentre, sectors_covered)
-from app.vision.path import anchor, best_path, link_circles, moving_track
+from app.vision.path import anchor, best_path, link_circles, moving_track, nearer, other_end
 from app.vision.plate import PLATE_DIAMETER_MM
 
 # --- coarse ---------------------------------------------------------------------
 WORK_WIDTH = 360          # the coarse stage runs on frames reduced to this width
 HOUGH_EVERY = 4           # frames between Hough samples when looking for the moving plate
 HOUGH_RADIUS = (0.03, 0.20)   # of the reduced frame height
+# The two ends of a bar are about 1.7 m apart, so the near plate is larger
+# in the picture by a factor that depends on how far away the camera stands.
+# On ten phone clips it was 1.22 to 1.35 times the far one.
+NEAR_SIZE = (0.9, 1.6)    # of the far plate's radius
+OTHER_REACH = 1.2         # of its radius: window round where the rigid bar puts the other end
+OTHER_SCORE = 0.8         # coverage + concentricity a candidate there needs
 
 # --- outline and fit --------------------------------------------------------------
 LEARN_ROUNDS = 3
@@ -130,8 +136,15 @@ def _reduce(image, scale):
     return cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
 
 
-def coarse_path(frames: Frames, work_width=WORK_WIDTH):
+def coarse_path(frames: Frames, work_width=WORK_WIDTH, near=None):
     """Rough plate centre per frame (full-frame pixels, or None) and its radius.
+
+    near, if given, is a point (full-frame pixels) on the side of the plate
+    nearer the camera. With the camera off to the side both ends of the bar
+    are in view, and the far plate is often the easier one to see: sharper
+    against a plain wall, while the near one is a dark plate against dark
+    tiles. But it is the one the lifter covers with arms and head, so the
+    near one is followed.
 
     Needs whole frames; on the Pi the live tracker does this job instead.
     """
@@ -146,6 +159,12 @@ def coarse_path(frames: Frames, work_width=WORK_WIDTH):
     bar = moving_track(tracks)
     if bar is None:
         return [None] * len(frames), None
+    small = lambda i: _reduce(frames.image(i)[0], scale)
+    far = None
+    if near is not None:
+        other = other_end(detections, bar)
+        if other is not None and not nearer(bar, other, (near[0] * scale, near[1] * scale)):
+            bar, far = _along_the_bar(small, bar, other), bar
     # The Hough transform reports whichever ring round the centre is sharpest,
     # often a change plate or the steel disc inside the rim, and seen from an
     # angle with its centre off the rim's. Everything below is built on this
@@ -154,16 +173,54 @@ def coarse_path(frames: Frames, work_width=WORK_WIDTH):
     # pixel. So the plate's extent is measured from what the track carried
     # with it; see app.vision.extent.
     radius = float(np.median([p[2] for _, p in bar]))
-    extent = carried_ellipse(lambda i: _reduce(frames.image(i)[0], scale), bar, HOUGH_RADIUS[1] * h)
+    extent = carried_ellipse(small, bar, HOUGH_RADIUS[1] * h)
+    if extent is not None and far is not None:
+        # The extent runs off into a plain wall more easily round the near
+        # plate, which is larger and nearer the edge of the picture: on one
+        # clip it came out four times the plate. The far plate bounds it.
+        far_extent = carried_ellipse(small, far, HOUGH_RADIUS[1] * h)
+        far_radius = 0.5 * (far_extent[2] + far_extent[3]) if far_extent else float(np.median([p[2] for _, p in far]))
+        if not NEAR_SIZE[0] * far_radius <= 0.5 * (extent[2] + extent[3]) <= NEAR_SIZE[1] * far_radius:
+            extent = None
     if extent is not None:
         dx, dy, a, b, _ = extent
         radius = 0.5 * (a + b)
         bar = [(i, (x + dx, y + dy, radius)) for i, (x, y, _) in bar]
-    candidates = [find_candidates(_reduce(frames.image(i)[0], scale), radius) for i in range(len(frames))]
+    candidates = [find_candidates(small(i), radius) for i in range(len(frames))]
     candidates = anchor(candidates, bar, radius)
     path = best_path(candidates, times, radius)
     centres = [None if c is None else (c.x / scale, c.y / scale) for c in path]
     return centres, radius / scale
+
+
+def _along_the_bar(small, track, other):
+    """The other end in every frame of track, where it can be found.
+
+    The Hough transform finds the near plate in fewer frames than the far
+    one when the near one is the harder to see, which is why the far one was
+    followed: on one clip in 13 of 33, all of them overhead. Anchored that
+    sparsely, the path went to a knee and a board in between. So where the
+    other end was not seen, it is looked for where the rigid bar puts it:
+    the followed end's position plus the offset in the nearest frame both
+    were seen in, among candidates of its own size.
+    """
+    seen = dict(other)
+    at = dict(track)
+    keys = np.array(sorted(seen))
+    r = float(np.median([p[2] for _, p in other]))
+    out = []
+    for i, (x, y, _) in track:
+        if i in seen:
+            out.append((i, seen[i]))
+            continue
+        j = int(keys[np.argmin(np.abs(keys - i))])
+        px, py = x + seen[j][0] - at[j][0], y + seen[j][1] - at[j][1]
+        reach = OTHER_REACH * r
+        found = [c for c in find_candidates(small(i), r, count=3, window=(px - reach, py - reach, px + reach, py + reach))
+                 if c.score >= OTHER_SCORE]
+        if found:
+            out.append((i, (found[0].x, found[0].y, r)))
+    return out
 
 
 # --- fine -----------------------------------------------------------------------
@@ -445,8 +502,9 @@ def _face(frames, fits, edges, outline, sample=LEARN_FRAMES):
     return face if agreement >= MIN_AXIS_AGREEMENT else replace(face, corrected=False)
 
 
-def track(frames: Frames) -> SetTrack:
-    centres, radius = coarse_path(frames)
+def track(frames: Frames, near=None) -> SetTrack:
+    """near: a point on the side of the plate nearer the camera, see coarse_path."""
+    centres, radius = coarse_path(frames, near=near)
     if radius is None:
         raise ValueError("no moving plate found")
     return measure(frames, centres, radius)
