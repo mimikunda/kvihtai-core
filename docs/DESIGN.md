@@ -357,13 +357,15 @@ boot as a systemd service, and a camera that fails is opened again.
   anything else runs. The 4 s ring buffer absorbs that for a while; a long set
   may still lose frames, and each set reports how many. The Pi 5 should not
   have this problem.
-- **The watcher on the new footage.** Played through the station at its own
-  pace, with the near plate tapped where it lay, the live centre was within
-  half a radius of the offline one in about 56 % of the offline run's frames,
-  53 % without the tap. On 9 of 37 clips the set starts on the wrong plate, and
-  on many the plate is lost during the lift. The same clip varied by tens of
-  percent from one run to the next, six clips being played at once, so the
-  measurement has to be made repeatable before the watcher is tuned.
+- **The watcher on the new footage.** Played through the watcher frame by
+  frame, as if the Pi kept up with every frame, with the near plate tapped
+  where it lay, the live centre was within half a radius of the offline one in
+  58 % of the offline run's frames, 47.5 % without the tap. On 8 of 37 clips
+  the set still starts on the other plate: at 360 px the near plate's rim
+  scores 0.5 to 0.9 where a watched plate needs 1.0, so it is not watched, or
+  its rim is taken to be a ring well outside it. On many the plate is lost
+  during the lift. Played in real time through a whole station session, six
+  clips at once, the same clip varied by tens of percent between runs.
 - **Absolute scale:** the chain is self-consistent but has never been checked
   against a length that is not part of the calculation. The bar is 2200 mm and
   is in shot, which would settle it without any new footage.
