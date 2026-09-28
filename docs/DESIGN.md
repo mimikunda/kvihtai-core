@@ -78,6 +78,34 @@ on the plate that moves the furthest are anchors the path must pass through. A
 greedy frame-by-frame tracker lost the plate to static circles. On the Pi the
 live watcher, below, does this job instead.
 
+The Hough circle is often not the rim: on the new footage it was a change
+plate or the steel disc inside the rim in about one clip in five, and seen from
+an angle its centre is off the rim's. So the plate's size is measured from what
+the followed track carries with it. Sampled round the followed centre, in the
+plate's own frame, the plate looks the same wherever it has been carried to and
+the background changes; where the spread of the samples over frames jumps is
+the silhouette of the plate stack. An ellipse through that boundary gives the
+radius and the centre's offset. Where the background is a plain wall it does
+not change either, and those directions are left out of the ellipse.
+
+**The near plate.** With the camera off to the side both ends of the bar are
+in view, and the far plate is often the easier to see: sharp against a plain
+wall, while the near one is a dark plate on dark tiles. On 14 of 37 new clips
+the far one was followed. It is the one the lifter's arms and head cover, and
+telling the two apart by size from the picture alone did not work: the hub of
+the near plate often has more edges round it than its rim. So the person
+setting up the station taps the near plate once in the app (see Station). On a
+video file, `tools/track_plate.py --near left|right` does the same.
+
+Given that side, the other end of the bar is found as the Hough circles that
+keep a steady offset from the followed track, since the bar is rigid, and that
+travel as far as it does, since a plate lying still while the bar rests before
+the lift also keeps a steady offset. The end on the tapped side is followed.
+Where Hough missed it, it is looked for where the rigid bar puts it. Its extent
+is bounded by the far plate's: on ten clips the near plate was 1.22 to 1.35
+times the far one in the picture, and round the near plate the extent can run
+off into a plain wall; on one clip it came out four times the plate.
+
 **Fine.** Edges are found along 180 rays from the centre, as the largest steps
 in Lab colour, refined to sub-pixel with a parabola. Lab, because a plate can
 differ from its background in lightness alone (black on dark clothes) or in
@@ -100,6 +128,15 @@ the way round, over a quarter of a second. It still follows the plate towards
 and away from the camera, but a frame that sees only an arc cannot trade its
 scale against its position.
 
+Where the tread or the plates behind show, the outline can sit on the stack's
+silhouette or on the front face's edge a tread's width in. In the catch of the
+first test clip the fit flipped between the two from frame to frame, 12 px
+apart, and both had a residual under 1.5 px and edges in 12 of 12 sectors. What
+tells them apart is the share of rays with an edge on the outline: 155 to 170
+of 180 for the right one, 120 to 126 for the other. So a fit that disagrees
+with what its neighbours predict is tried again from their prediction, and
+whichever explains more of the rim is kept.
+
 The front face is then recovered from the same pooled edges: it is the tread
 vector that puts the most edges where the face edge would have to be, inside
 the silhouette on the tread side. The face's centre is the bar end, its major
@@ -108,9 +145,15 @@ axis is the 450 mm, and its axis ratio is the camera angle.
 Frames are accepted on four checks: edges in at least 5 of 12 directions round
 the rim, a median edge distance from the outline under 3 % of the radius, a
 scale within 5 % of the running median, and a radial brightness profile that
-correlates with the set's median profile. The whole set must also be built like
-a plate, in rings. Rejected frames are reported with the reason and never
-interpolated. A frame the coarse stage lost between two measured ones is
+correlates with the set's median profile. A set that followed the wrong thing
+from start to finish agrees with its own median, so the whole set must also
+carry its face: sampled in the circle's own frame, the inside of a plate is the
+same picture wherever it has moved to, while a ring or a wheel shows the room
+behind it sliding through. Frames a radius apart are compared. Concentricity,
+which used to decide this, cannot on the new footage: a plate with a printed
+label and a lighting gradient scores 0.08 where a ring scores 0.11. A set that
+never moved a radius still has to be built in rings. Rejected frames are
+reported with the reason and never interpolated. A frame the coarse stage lost between two measured ones is
 looked for again between them, up to 12 frames.
 
 ### What has been verified
@@ -145,6 +188,21 @@ angle comes out as 25. At 50 degrees nothing is found. The fine stage's
 outline learning also assumes the silhouette lies within 15 % of a circle. Both
 need work before a camera well off to the side can be supported.
 
+**37 more phone clips**, from six sessions in four gyms, handheld and upright:
+31 at 720x1280 and 60 fps, 6 at 480x848 and 24 or 30 fps, 526 s in all. With
+the near side given, 24,273 of 27,845 frames were measured (87 %), on the near
+plate. The median noise is 0.42 px, from 0.12 to 1.3 px. Before the near
+plate was followed the share was 92 %, but on 14 clips of the far plate, which
+is easier to measure: its noise was 0.15 to 0.3 px on the clips where it has
+since gone to 0.3 to 1.3. Not yet right:
+
+- two clips measure nothing: on one the path leaves the near plate for a knee
+  and a board where Hough never saw the plate, on the other the plate comes out
+  1.8 times its size;
+- on one clip a plate lying still on the floor is followed instead of the bar,
+  the camera's shake giving it the most travel;
+- the appearance check rejects frames that are right: 225 of 755 on one clip.
+
 Verification habit: check every reported frame against the footage, as a
 contact sheet of all of them. Rim scatter says how well the edges agree with
 each other, not whether they are on the plate, and a fit on the wrong object
@@ -178,6 +236,11 @@ Three threads, and a fourth for searching:
   edge nearly all the way round. Not the most complete ring: a plate standing on
   the floor loses the bottom of its rim to the floor, and the face then scores
   higher.
+- **The near plate.** Both ends of the bar start to move in the same check.
+  The one followed is on the side of the near plate tapped in the app, not
+  whichever was confirmed first. Round the tap the search also looks for a
+  plate at every size, since the Hough transform can miss the near plate
+  altogether: on one clip only the far one was ever watched.
 - **Pre-roll.** When a plate starts to move, the set starts one second back in
   the ring buffer, so the start of the lift is kept.
 - **Active.** Every frame the plate is looked for in small windows along the
@@ -262,6 +325,10 @@ boot as a systemd service, and a camera that fails is opened again.
   stage does not care which way is up, so frames are kept as the camera gives
   them, and only a set's crops, their positions and the live centres are turned
   upright before the analysis, which needs to know where gravity points.
+- **The near plate.** Tapped once in the app after the camera is set up, not
+  before every lift: it stays on the same side of the picture until the camera
+  is moved. It is kept in `camera.json` as the camera sees it, so turning the
+  picture later does not move it.
 - **Light.** The exposure stays at what was set; the gain follows the light
   between sets, towards a median brightness of 110, and is never changed during
   a set.
@@ -290,6 +357,13 @@ boot as a systemd service, and a camera that fails is opened again.
   anything else runs. The 4 s ring buffer absorbs that for a while; a long set
   may still lose frames, and each set reports how many. The Pi 5 should not
   have this problem.
+- **The watcher on the new footage.** Played through the station at its own
+  pace, with the near plate tapped where it lay, the live centre was within
+  half a radius of the offline one in about 56 % of the offline run's frames,
+  53 % without the tap. On 9 of 37 clips the set starts on the wrong plate, and
+  on many the plate is lost during the lift. The same clip varied by tens of
+  percent from one run to the next, six clips being played at once, so the
+  measurement has to be made repeatable before the watcher is tuned.
 - **Absolute scale:** the chain is self-consistent but has never been checked
   against a length that is not part of the calculation. The bar is 2200 mm and
   is in shot, which would settle it without any new footage.
