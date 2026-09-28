@@ -55,7 +55,14 @@ MAX_SCALE_DRIFT = 0.05    # disagreement with the smoothed scale
 MIN_SIMILARITY = 0.0      # see appearance.py
 # The appearance check compares each frame with the set's own median, so a set
 # that followed the wrong thing from start to finish would agree with itself.
-# Whatever was followed must also be built like a plate, in rings.
+# What was followed must also carry its face: sampled in its own frame, the
+# inside of a plate is the same picture wherever the plate has moved to, while
+# a ring or a wheel shows the room behind it and the room slides through it.
+# Two frames a radius apart settle it. Concentricity, which used to, cannot:
+# on this footage a plate with a printed label and a lighting gradient across
+# it scores 0.08 where a ring scores 0.11. It is still the test for a set that
+# never moved a radius, which is the case it was measured on.
+MIN_INTERIOR = 0.25       # correlation of the inside between two such frames
 MIN_CONCENTRICITY = 0.15
 
 # --- the camera angle --------------------------------------------------------------
@@ -85,6 +92,7 @@ class Measurement:
     similarity: float
     accepted: bool
     reason: str = ""
+    interior: float = 0.0       # the inside against the set's, see appearance.inside()
 
 
 @dataclass
@@ -288,8 +296,12 @@ def measure(frames: Frames, centres, radius) -> SetTrack:
         profiles[i] = appearance.radial_profile(img, f.centre - org, f.scale, outline)
     trusted = [i for i in fits if sectors_covered(edges[i][fits[i].inliers], fits[i].centre) >= GOOD_SECTORS]
     reference = np.median(np.array([profiles[i] for i in (trusted or list(fits))]), axis=0)
-    rings = _concentricity(frames, fits, trusted or list(fits))
-    not_a_plate = rings < MIN_CONCENTRICITY
+    insides = {}
+    for i, f in fits.items():
+        img, org = frames.image(i)
+        insides[i] = appearance.inside(img, f.centre - org, f.scale)
+    inside_ref = np.median(np.array([insides[i] for i in (trusted or list(fits))]), axis=0)
+    not_a_plate = not _carries_its_face(frames, fits, trusted or list(fits))
 
     face = outline.face
     measurements = [None] * n
@@ -314,8 +326,37 @@ def measure(frames: Frames, centres, radius) -> SetTrack:
             face_x=float(fx), face_y=float(fy),
             mm_per_px=PLATE_DIAMETER_MM / (face.major * float(scale_t[i])),
             residual=f.residual(), sectors=sectors, similarity=sim,
-            accepted=not reason, reason=reason)
+            accepted=not reason, reason=reason,
+            interior=appearance.travels_with(insides[i], inside_ref))
     return SetTrack(outline, measurements, frames.frame_size, radius, edges)
+
+
+def _carries_its_face(frames, fits, keys, sample=15):
+    """Is what was fitted a plate, or something the background shows through?
+
+    Pairs of frames the fit moved a radius between are compared inside the
+    circle, in the circle's own frame. Where the set never moved that far the
+    question cannot be put that way, and the old test is used instead: the
+    inside of a plate is built in rings.
+    """
+    keys = sorted(keys)
+    centres = np.array([fits[i].centre for i in keys])
+    scales = np.array([fits[i].scale for i in keys])
+    pairs = []
+    for a in range(0, len(keys), max(1, len(keys) // sample)):
+        far = np.nonzero(np.hypot(*(centres - centres[a]).T) >= scales[a])[0]
+        if far.size:
+            pairs.append((keys[a], keys[int(far[np.argmin(np.abs(far - a))])]))
+    if not pairs:
+        return _concentricity(frames, fits, keys) >= MIN_CONCENTRICITY
+    values = []
+    for a, b in pairs:
+        samples = []
+        for i in (a, b):
+            img, org = frames.image(i)
+            samples.append(appearance.inside(img, fits[i].centre - org, fits[i].scale))
+        values.append(appearance.travels_with(*samples))
+    return float(np.median(values)) >= MIN_INTERIOR
 
 
 def _concentricity(frames, fits, keys, sample=30):
