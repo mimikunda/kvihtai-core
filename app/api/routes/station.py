@@ -16,6 +16,8 @@ class CameraChange(BaseModel):
     exposure_us: int | None = None
     gain: float | None = None
     auto_gain: bool | None = None
+    # dioptres, 1 / distance in metres; 0 is far away. Holds the focus there.
+    lens_position: float | None = None
     # (x, y) from 0 to 1 across the upright picture: a tap on the plate nearer
     # the camera. An empty list forgets it.
     near_plate: list[float] | None = None

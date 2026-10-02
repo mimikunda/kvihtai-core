@@ -86,6 +86,13 @@ def test_the_near_plate_is_kept_as_the_camera_sees_it(client):
     assert client.put("/api/v1/camera", json={"near_plate": []}).json()["near_plate"] is None
 
 
+def test_the_focus_is_held_where_it_is_set(client):
+    assert client.put("/api/v1/camera", json={"lens_position": 0.4}).json()["lens_position"] == 0.4
+    assert client.put("/api/v1/camera", json={"lens_position": 99}).json()["lens_position"] == 15.0
+    with open(os.path.join(settings.data_dir, "camera.json")) as fh:
+        assert json.load(fh)["lens_position"] == 15.0
+
+
 def test_the_status_says_what_went_wrong_before(client):
     client.app.state.station.add_incident("the camera stopped sending pictures; the station restarted")
     status = client.get("/api/v1/status").json()

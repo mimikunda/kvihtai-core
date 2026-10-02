@@ -345,6 +345,10 @@ boot as a systemd service, and a camera that fails is opened again.
 - **Light.** The exposure stays at what was set; the gain follows the light
   between sets, towards a median brightness of 110, and is never changed during
   a set.
+- **Focus.** Set once, like the near plate, and then held: autofocus in the
+  app, or a distance by hand. The autofocus result is read when the camera
+  says it has finished. Read after a fixed 2.5 s it was wherever the scan had
+  got to, and the station kept 0.1 m for a wall 0.2 m away.
 - **Sets with no rise.** A plate that moved without being lifted, knocked or
   carried past, is analysed, kept on disk, and left out of the app.
 - **Time.** At the gym the Pi has no internet and no clock of its own, and wakes

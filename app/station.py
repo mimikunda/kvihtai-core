@@ -35,9 +35,11 @@ log = logging.getLogger("kvihtai.station")
 
 TARGET_BRIGHTNESS = 110      # median of the picture, 0-255, that the gain aims for
 MIN_GAIN = 1.0
+MAX_LENS = 15.0              # dioptres, the Camera Module 3's nearest focus
 STALL_S = 5.0                # no frame for this long, and the camera has stopped
 FIRST_FRAME_S = 20.0         # the same, while a camera that was just opened starts
 KEEP_INCIDENTS = 50
+AF_SCANNING, AF_FOCUSED, AF_FAILED = 1, 2, 3     # libcamera's AfState
 
 
 @dataclass
@@ -112,6 +114,7 @@ class Station:
         self._path_t = None
         self.analyser = ProcessAnalyser()
         self.started = time.monotonic()
+        self.focus = None                       # "focusing", "focused" or "failed", after the last autofocus
         self.incidents = self._load_incidents()
         self.exit = os._exit                    # how the station ends itself, see _watch_camera
         self._watched = (None, 0, 0.0)          # (session, frames in, when that number last changed)
@@ -305,6 +308,10 @@ class Station:
             cam.gain = float(min(max(changes["gain"], MIN_GAIN), 16.0))
             cam.auto_gain = bool(changes.get("auto_gain", False))
             controls["AnalogueGain"] = cam.gain
+        if changes.get("lens_position") is not None:
+            cam.lens_position = round(float(min(max(changes["lens_position"], 0.0), MAX_LENS)), 3)
+            controls.update(AfMode=0, LensPosition=cam.lens_position)     # manual, held there
+            self.focus = None
         if controls and hasattr(self.source, "set_controls"):
             self.source.set_controls(**controls)
         self._save_camera()
@@ -314,14 +321,29 @@ class Station:
         if not hasattr(self.source, "autofocus"):
             return False
         self.source.autofocus()
+        self.focus = "focusing"
 
         def remember():
-            time.sleep(2.5)
+            # The lens moves for a second or two. Read before the camera says it
+            # is done, the position is wherever the scan had got to: on the Pi
+            # that once kept 0.1 m for a wall 0.2 m away.
+            scanned = False
+            state = None
+            for _ in range(60):                 # metadata comes every 16th frame; 6 s in all
+                time.sleep(0.1)
+                state = (getattr(self.source, "metadata", {}) or {}).get("AfState")
+                scanned = scanned or state == AF_SCANNING
+                if scanned and state in (AF_FOCUSED, AF_FAILED):
+                    break
             lens = (getattr(self.source, "metadata", {}) or {}).get("LensPosition")
-            if lens is not None:
-                self.camera.lens_position = round(float(lens), 3)
-                self._save_camera()
-                self.note(f"focused at {1 / max(lens, 1e-3):.1f} m")
+            self.focus = "focused" if state == AF_FOCUSED else "failed"
+            if lens is None:
+                return
+            self.camera.lens_position = round(float(lens), 3)
+            self._save_camera()
+            where = "far away" if lens < 0.05 else f"{1 / lens:.1f} m"
+            self.note(f"focused at {where}" if self.focus == "focused" else
+                      f"autofocus found nothing sharp; the lens stays at {where}")
         threading.Thread(target=remember, daemon=True).start()
         return True
 
@@ -338,6 +360,7 @@ class Station:
             "lens_actual": round(meta["LensPosition"], 3) if "LensPosition" in meta else None,
             "lux": round(meta["Lux"], 1) if "Lux" in meta else None,
             "brightness": self.brightness,
+            "focus": self.focus,
             "too_dark":bool(self.brightness is not None and self.brightness < 60 and self.camera.gain >= 15.9),
         }
 
