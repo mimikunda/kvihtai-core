@@ -86,6 +86,13 @@ def test_the_near_plate_is_kept_as_the_camera_sees_it(client):
     assert client.put("/api/v1/camera", json={"near_plate": []}).json()["near_plate"] is None
 
 
+def test_the_status_says_what_went_wrong_before(client):
+    client.app.state.station.add_incident("the camera stopped sending pictures; the station restarted")
+    status = client.get("/api/v1/status").json()
+    assert status["incidents"][-1]["what"].startswith("the camera stopped")
+    assert status["uptime_s"] >= 0
+
+
 def test_no_picture_and_no_focus_without_a_camera(client):
     assert client.get("/api/v1/camera/preview.jpg").status_code == 503
     assert client.post("/api/v1/camera/focus").status_code == 409

@@ -321,6 +321,19 @@ boot as a systemd service, and a camera that fails is opened again.
   before it was being analysed lost more than half of its frames. The crops go
   to the worker one at a time and are dropped as they go, so a set is never in
   memory twice. The worker runs at a lower priority.
+- **A camera that stops.** On the Pi 4B the Camera Module 3 has stopped
+  sending frames for good, with no error, 20 s after it was opened. picamera2
+  then waits for the next frame forever, and the app showed the last picture
+  at 0 fps until the Pi was switched off. Now the station ends itself when no
+  frame has come for 5 s, or for 20 s after the camera was opened, and systemd
+  starts it again, which opens the camera afresh. Ending the process rather
+  than closing the camera, because closing a camera whose driver has hung can
+  hang too. What happened is kept in `incidents.json` and shown in the app.
+  Why the camera stops is not known. At the moment it stopped, libcamera
+  logged `PDAF data in unsupported format`, which it does when a frame's
+  focus data cannot be read. The same message came 9 times in the first
+  minute after the camera was opened, then about once a minute, and not at
+  all in 4 minutes with the fan off, at full speed, or switched on and off.
 - **Turned cameras.** The enclosure stands the camera on its side. The live
   stage does not care which way is up, so frames are kept as the camera gives
   them, and only a set's crops, their positions and the live centres are turned
