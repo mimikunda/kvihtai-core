@@ -48,6 +48,10 @@ MODELS = {
 
 # Where the ribbon plugs into the Pi: x of the ribbon in the connector, top of
 # the connector, and the box round the connector's own pieces.
+RIBBON_LEN = 100.0          # the Pi 4's cable, counting the ends inside both connectors
+RIBBON_SLACK = 4.0          # of it, left for the loops to be rounder than drawn
+RIBBON_STRAIGHT = 7.0       # out of the camera's latch before the first bend
+
 PI_CONNECTOR = {
     "pi5": {"x": 55.0, "top": 5.29, "pieces": (53.0, 56.5, 17.0)},
     "pi4b": {"x": 46.1, "top": 7.38, "pieces": (43.8, 49.0, 23.0)},
@@ -174,7 +178,8 @@ def extras(p):
 
 
 def ribbon_path(p):
-    """Control points of the camera FPC in the xz plane, and its width and centre y along the way."""
+    """Points of the camera FPC in the xz plane, its width and centre y along
+    the way, and how far it runs straight out of each connector."""
     zr = p.cam_zb - 1.3
     pc = PI_CONNECTOR[p.board]
     if p.board == "pi5":
@@ -191,48 +196,89 @@ def ribbon_path(p):
 
         def centre(t):
             return p.lens_y + (8.5 - p.lens_y) * t
-        return ctrl, width, centre
+        return ctrl, width, centre, None
 
-    # Pi 4: the camera is flipped, so the ribbon leaves it towards -x. It runs
-    # along under the lid to the left end, turns down and comes back above the
-    # board to the Pi's camera connector, which it enters from above.
-    x_cam = p.cam_to_box(23.49 - 3.5, 0).x
-    x_e = p.cam_to_box(E.CAM_PCB_X, 0).x
-    z_up = p.z_li - 0.5                     # under the lid
-    z_lo, x_left = 6.0, 6.6                 # low point of the loop, and how far left it reaches
-    r = (z_up - z_lo) / 2
-    xc, zc = x_left + r, (z_up + z_lo) / 2
-    k = r / math.sqrt(2)
-    x_pi, z_pi = pc["x"], pc["top"] - 4.0
-    z_v, r_v = pc["top"] + 0.5, 2.5        # the ribbon is vertical from here down, after a bend of this radius
-    ctrl = [(x_cam, zr), (x_e, zr), (x_e - 2.0, zr + 0.6), (x_e - 4.0, zr + 2.6), (x_e - 6.0, z_up - 1.0),
-            (x_e - 9.0, z_up), (xc + 5.0, z_up), (xc, z_up),
-            (xc - k, zc + k), (x_left, zc), (xc - k, zc - k), (xc, z_lo),
-            (xc + 8.0, z_lo), (28.0, z_lo), (34.0, z_lo + 1.5), (39.5, z_v + r_v - 0.2), (x_pi - r_v, z_v + r_v),
-            (x_pi - r_v + r_v / math.sqrt(2), z_v + r_v / math.sqrt(2)), (x_pi, z_v), (x_pi, z_v - 1.8),
-            (x_pi, z_pi)]
+    # Pi 4, with a 100 mm cable whose contacts are on opposite sides at its two
+    # ends. The cable runs straight for 7 mm out of each connector before it
+    # bends: the first print bent it at the latch, and the camera lost frames.
+    # It leaves the camera towards +x, turns down and back under the camera,
+    # turns down again and comes back below that, then rises past the end of
+    # the first turn, goes over the top and comes straight down into the Pi's
+    # camera connector. How far back under the camera it reaches takes up the
+    # length of the cable.
+    x_mouth = p.cam_to_box(23.49, 0).x
+    r1, r2, r3 = 1.6, 1.4, 1.5             # the two turns under the camera, and the bend up
+    x_up = x_mouth + RIBBON_STRAIGHT + r1 + 1.6        # the rise, clear of the first turn
+    r4 = (pc["x"] - x_up) / 2              # over the top, down into the Pi
+    z_lo = zr - 2 * r1 - 2 * r2
+    z_v = p.z_li - 0.5 - r4                # where the rise turns over
+    z_pi = pc["top"] - 4.0
+    fixed = (3.5 + RIBBON_STRAIGHT + math.pi * (r1 + r2) + math.pi / 2 * r3 + (z_v - z_lo - r3)
+             + math.pi * r4 + (z_v - z_pi))
+    layers = RIBBON_LEN - RIBBON_SLACK - fixed          # the two runs under the camera, together
+    x_turn = (x_mouth + RIBBON_STRAIGHT + x_up - r3 - layers) / 2
+    ctrl = trace((x_mouth - 3.5, zr), 0.0, [
+        ("line", 3.5), ("line", RIBBON_STRAIGHT), ("arc", r1, -180),
+        ("line", x_mouth + RIBBON_STRAIGHT - x_turn), ("arc", r2, 180),
+        ("line", x_up - r3 - x_turn), ("arc", r3, 90),
+        ("line", z_v - z_lo - r3), ("arc", r4, -180), ("line", z_v - z_pi)])
+    straight = {"camera": RIBBON_STRAIGHT, "pi": round(z_v - pc["top"], 2)}
 
     def width(t):       # 15-way at both ends
         return 16.0
 
     def centre(t):
         return p.lens_y + (11.5 - p.lens_y) * t
-    return ctrl, width, centre
+    return ctrl, width, centre, straight
 
 
-def ribbon(p, n=90):
+def trace(start, heading, steps, step=0.4):
+    """Points along straight lines and arcs in the xz plane.
+
+    heading is in degrees from +x towards +z; an arc of positive angle turns
+    towards +z from there, anticlockwise with x to the right and z up."""
+    x, z = start
+    a = math.radians(heading)
+    pts = [(x, z)]
+    for kind, *args in steps:
+        if kind == "line":
+            n = max(1, int(round(args[0] / step)))
+            for i in range(n):
+                x += math.cos(a) * args[0] / n
+                z += math.sin(a) * args[0] / n
+                pts.append((x, z))
+        else:
+            r, turn = args
+            sign = 1 if turn > 0 else -1
+            cx, cz = x - sign * r * math.sin(a), z + sign * r * math.cos(a)
+            n = max(2, int(round(abs(math.radians(turn)) * r / step)))
+            for i in range(1, n + 1):
+                b = a + math.radians(turn) * i / n
+                x, z = cx + sign * r * math.sin(b), cz - sign * r * math.cos(b)
+                pts.append((x, z))
+            a += math.radians(turn)
+    return pts
+
+
+def ribbon(p, slab=0.3):
     """The camera FPC as a chain of thin slabs, from the camera connector to the Pi's.
 
     Returns the whole ribbon; the slabs outside the two connectors; those
-    slabs less the first 3 mm out of the camera connector; and the length. Path in the xz plane, width along y. It leaves the camera
+    slabs less the first 3 mm out of the camera connector; the length; and
+    all the slabs. Path in the xz plane, width along y. It leaves the camera
     connector with its contacts facing the camera PCB. The ribbon does not
-    twist, so its contacts then face +x on the Pi 5 (the Ethernet jack, as the
-    Pi 5 connector requires) and -x on the Pi 4 (the micro-HDMI sockets).
+    twist, so that face of it faces +x at the Pi's end. On the Pi 5 the
+    cable's contacts are on that face at both ends, and face the Ethernet jack,
+    as the Pi 5 connector requires. On the Pi 4 they are on the other face at
+    the Pi's end, and face -x, the micro-HDMI sockets.
     """
-    ctrl, width, centre = ribbon_path(p)
+    ctrl, width, centre, _ = ribbon_path(p)
     curve = Part.BSplineCurve()
     curve.interpolate([V(x, 0, z) for x, z in ctrl])
     length = curve.length()
+    # short slabs: round a tight turn, long ones meet at angles the boolean fuse
+    # gets wrong, and it drops pieces of the ribbon
+    n = max(90, math.ceil(length / slab))
     pc = PI_CONNECTOR[p.board]
     x_mouth = p.cam_to_box(23.49, 0).x
     slabs, free, away = [], [], []
@@ -254,13 +300,13 @@ def ribbon(p, n=90):
         # tilted slab reaches back past its end by up to half its thickness,
         # hence the 0.3 mm.
         in_cam = any(p.cam_zb - E.CAM_CONN_H < q.z < p.cam_zb
-                     and ((q.x > x_mouth - 0.3) if p.cam_flip else (q.x < x_mouth + 0.3)) for q in (a, b))
+                     and q.x < x_mouth + 0.3 for q in (a, b))
         in_pi = any(q.z < pc["top"] + 0.3 and abs(q.x - pc["x"]) < 1.5 for q in (a, b))
         if not (in_cam or in_pi):
             free.append(seg)
             if min((a - mouth).Length, (b - mouth).Length) > 3.0:
                 away.append(seg)
-    return E.fuse_all(slabs), free, away, length
+    return E.fuse_all(slabs), free, away, length, slabs
 
 
 def grown(bb, d=0.05):
@@ -358,11 +404,16 @@ def main():
     pi_pieces = [(f"pi#{i}", s) for i, s in enumerate(pi_list)]
     print(f"models loaded, {len(pi_pieces)} Pi pieces ({time.time() - t0:.0f} s)", flush=True)
     cam = load(model_path("cm3"))
+    # the lens, which moves to focus, is the solid that reaches furthest forward
+    lens_i = min(range(len(cam.Solids)), key=lambda i: cam.Solids[i].BoundBox.ZMin)
     cam.Placement = p.cam_placement()
     cam = cam.copy()
     cam_pieces = [(f"cam#{i}", s) for i, s in enumerate(cam.Solids)]
+    lens = cam.Solids[lens_i]
+    lens_forward = lens.copy()
+    lens_forward.translate(V(0, 0, E.LENS_TRAVEL))
     more = extras(p)
-    rib, free_slabs, away_slabs, rib_len = ribbon(p)
+    rib, free_slabs, away_slabs, rib_len, rib_slabs = ribbon(p)
     rib_free = E.fuse_all(free_slabs)
 
     report = {"board": BOARD, "params": {"z_top": p.z_top, "z_li": p.z_li, "cam_zb": p.cam_zb}}
@@ -375,6 +426,7 @@ def main():
         report[f"{name}_vs_pi"] = overlaps(part, pi_pieces, f"{name} vs Pi")
     report["base_vs_cam"] = overlaps(base, cam_pieces, "base vs camera")
     report["lid_vs_cam"] = overlaps(lid, cam_pieces, "lid vs camera")
+    report["lid_vs_lens_forward"] = overlaps(lid, [("lens moved to focus", lens_forward)], "lid vs lens moved forward")
     report["pi_vs_cam"] = overlaps(cam, [(n, s) for n, s in pi_pieces if s.BoundBox.ZMax > 5],
                                    "camera vs tall Pi parts")
     for name, s in more.items():
@@ -407,6 +459,8 @@ def main():
         "ribbon_to_lid": gap(rib_free, lid),
         "ribbon_to_pi": gap(free_slabs, [s for _, s in not_cam_conn]),
         "ribbon_to_camera": gap(away_slabs, cam_solids),
+        "lens_to_lid": gap(lens, lid),
+        "lens_forward_to_lid": gap(lens_forward, lid),
     }
     if "button" in parts:
         gaps["button_pin_to_plunger"] = gap(parts["button"], near(parts["button"], pi_pieces))
@@ -419,8 +473,10 @@ def main():
         gaps["fan_to_leads"] = gap(more["fan"], more["leads"])
     report["gaps"] = gaps
     report["ribbon_path_length_mm"] = round(rib_len, 1)
+    report["ribbon_straight_mm"] = ribbon_path(p)[3]
     print(f"gaps done ({time.time() - t0:.0f} s)", flush=True)
-    print(json.dumps({"gaps": gaps, "ribbon_path_length_mm": round(rib_len, 1)}, indent=2))
+    print(json.dumps({"gaps": gaps, "ribbon_path_length_mm": round(rib_len, 1),
+                      "ribbon_straight_mm": report["ribbon_straight_mm"]}, indent=2))
 
     os.makedirs(OUT, exist_ok=True)
     with open(os.path.join(OUT, "report.json"), "w") as f:
@@ -440,6 +496,9 @@ def main():
     to_slice = {name: [s] for name, s in meshes.items()}
     to_slice["pi"] = [s for _, s in pi_pieces]
     to_slice["camera"] = [s for _, s in cam_pieces]
+    # The fused ribbon's section along its length comes back as wires that do
+    # not discretise; its slabs, one by one, do.
+    to_slice["ribbon"] = rib_slabs
     secs = {}
     for normal, d, label, title in sections(p):
         axis = normal.index(1)

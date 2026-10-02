@@ -48,7 +48,17 @@ CAM_HOLES = [(2.0, 2.0), (14.5, 2.0), (2.0, 23.0), (14.5, 23.0)]
 CAM_LENS = (14.4, 12.5)
 CAM_CONN_H = 2.60                 # connector height behind the PCB
 CAM_LENS_TIP = {"standard": 7.65, "wide": 8.81}   # PCB back to lens tip
-CAM_LENS_D = {"standard": 5.77, "wide": 7.04}     # widest part that enters the lid
+CAM_LENS_D = {"standard": 5.77, "wide": 7.04}     # the barrel at the lens tip
+# The lens moves forward to focus, and the part that moves is wider than the
+# barrel: on the standard lens it is a cone from 8.5 mm at the top of the
+# housing, 5.55 mm in front of the PCB back, narrowing to the barrel 6.6 mm in
+# front of it. The first printed lid had a hole round the barrel only. Its
+# inner edge sat on the cone, and the lens could not move. Measured from the
+# vendor STEP models.
+CAM_LENS_CARRIER_D = 8.5                           # widest part of the lens that moves
+CAM_LENS_CONE_TOP = {"standard": 6.6, "wide": 6.2}   # PCB back to where it has narrowed to the barrel
+LENS_TRAVEL = 0.5                 # forward; focusing at 10 cm takes about 0.24 mm with the 4.74 mm lens
+LENS_CLEAR = 0.6                  # round the moving lens; printed holes come out smaller than drawn
 
 # Hardware
 M25_PILOT = 2.2                   # self-tapping M2.5 into PETG
@@ -71,7 +81,6 @@ BOARD_PARAMS = {
     "pi5": {
         "pcb_top": 1.31,          # top face of the PCB in the vendor model
         "lens_x": 41.0,           # 1.5 mm left of centre, which gives the camera cable room for its loop
-        "cam_flip": False,
         "grille": (42.3, 35.0, 11.0, 24.9),   # centre, radius, lowest y: over the blower, clear of the camera
     },
     "pi4b": {
@@ -79,11 +88,13 @@ BOARD_PARAMS = {
         # both faces of the 1.6 mm board. The board rests on them, so z = 0 is
         # the underside of the pads and the lid posts clamp their top.
         "pcb_top": 1.8,
-        # The Pi 4 wants the cable's contacts facing the micro-HDMI sockets. With
-        # a cable that has its contacts on the same side at both ends, that is
-        # only possible with the camera turned so its connector faces -x.
-        "cam_flip": True,
-        "lens_x": 43.5,           # the camera ends 1.2 mm short of the lid post by the audio jack
+        # The Pi 4 wants the cable's contacts facing the micro-HDMI sockets, the
+        # camera wants them facing its board. With a cable whose contacts are on
+        # opposite sides at its two ends, that holds with the camera's connector
+        # facing +x, the Pi's camera connector, as on the Pi 5. The camera sits
+        # towards the microSD end, so that the cable has room for its loops; see
+        # ribbon_path in check.py.
+        "lens_x": 22.4,           # the camera starts 2.1 mm clear of the lid post by the USB-C socket
         "fan_xy": (33.0, 37.0),   # over the SoC, clear of the camera
         "fan_gap": 3.0,           # between the fan and the lid: room for the air it draws in
         "lead_bend": 2.0,         # above the Dupont housings, for the fan leads to bend over
@@ -151,16 +162,10 @@ class Params:
         """Camera model coordinates to box coordinates.
 
         The model looks along -z and the box along +z, so the camera is turned
-        180 degrees about x; with cam_flip, 180 degrees about y instead, which
-        puts its cable connector on the -x side."""
-        if self.cam_flip:
-            return V(self.lens_x - (xm - CAM_LENS[0]), self.lens_y + (ym - CAM_LENS[1]), self.cam_zb - zm)
+        180 degrees about x. Its cable connector is then on the +x side."""
         return V(self.cam_x0 + xm, self.lens_y - (ym - CAM_LENS[1]), self.cam_zb - zm)
 
     def cam_placement(self):
-        if self.cam_flip:
-            rot = App.Rotation(V(0, 1, 0), 180)
-            return App.Placement(V(self.lens_x + CAM_LENS[0], self.lens_y - CAM_LENS[1], self.cam_zb), rot)
         rot = App.Rotation(V(1, 0, 0), 180)
         return App.Placement(V(self.cam_x0, self.lens_y + CAM_LENS[1], self.cam_zb), rot)
 
@@ -446,9 +451,14 @@ def build_lid(p):
         adds.append(zcyl(c.x, c.y, 2.1, z_front, p.z_li + 0.01))
         cuts.append(zcyl(c.x, c.y, M2_PILOT / 2, z_front - 0.1, z_front + 6.0))
 
-    # lens opening with a small chamfer on the face
-    lr = CAM_LENS_D[p.camera] / 2 + 0.36
+    # lens opening, clear of the lens as it moves to focus: round the barrel,
+    # and wider where the cone of the moving lens comes up into the lid. A small
+    # chamfer on the face.
+    lr = CAM_LENS_D[p.camera] / 2 + LENS_CLEAR
     cuts.append(zcyl(p.lens_x, p.lens_y, lr, p.z_li - 0.2, p.z_top + 0.1))
+    z_cone = p.cam_zb + CAM_LENS_CONE_TOP[p.camera] + LENS_TRAVEL
+    if z_cone > p.z_li:
+        cuts.append(zcyl(p.lens_x, p.lens_y, CAM_LENS_CARRIER_D / 2 + LENS_CLEAR, p.z_li - 0.2, z_cone))
     cuts.append(Part.makeCone(lr, lr + 0.6, 0.6, V(p.lens_x, p.lens_y, p.z_top - 0.6)))
 
     cuts.append(grille(p))

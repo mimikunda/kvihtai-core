@@ -14,8 +14,8 @@
       69.5,
       20.5
     ],
-    "volume_cm3": 14.41,
-    "mesh_facets": 9378
+    "volume_cm3": 14.37,
+    "mesh_facets": 9662
   },
   "params": {
     "board": "pi4b",
@@ -26,8 +26,8 @@
     "z_top": 22.3,
     "z_wall": 20.0,
     "cam_zb": 14.15,
-    "cam_x0": 29.1,
-    "lens_x": 43.5,
+    "cam_x0": 7.999999999999998,
+    "lens_x": 22.4,
     "lens_y": 11.3,
     "x_out": [
       -3.0,
