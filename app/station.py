@@ -35,6 +35,11 @@ log = logging.getLogger("kvihtai.station")
 
 TARGET_BRIGHTNESS = 110      # median of the picture, 0-255, that the gain aims for
 MIN_GAIN = 1.0
+MAX_LENS = 15.0              # dioptres, the Camera Module 3's nearest focus
+STALL_S = 5.0                # no frame for this long, and the camera has stopped
+FIRST_FRAME_S = 20.0         # the same, while a camera that was just opened starts
+KEEP_INCIDENTS = 50
+AF_SCANNING, AF_FOCUSED, AF_FAILED = 1, 2, 3     # libcamera's AfState
 
 
 @dataclass
@@ -108,6 +113,13 @@ class Station:
         self._path = deque(maxlen=12)           # recent (t, x_mm, y_mm) of the followed plate
         self._path_t = None
         self.analyser = ProcessAnalyser()
+        self.started = time.monotonic()
+        self.focus = None                       # "focusing", "focused" or "failed", after the last autofocus
+        self.incidents = self._load_incidents()
+        self.exit = os._exit                    # how the station ends itself, see _watch_camera
+        self._watched = (None, 0, 0.0)          # (session, frames in, when that number last changed)
+        for inc in self.incidents[-3:]:
+            self.lines.append(f"earlier, {inc['at']}: {inc['what']}")
 
     # --- lifecycle ------------------------------------------------------------------
 
@@ -296,6 +308,10 @@ class Station:
             cam.gain = float(min(max(changes["gain"], MIN_GAIN), 16.0))
             cam.auto_gain = bool(changes.get("auto_gain", False))
             controls["AnalogueGain"] = cam.gain
+        if changes.get("lens_position") is not None:
+            cam.lens_position = round(float(min(max(changes["lens_position"], 0.0), MAX_LENS)), 3)
+            controls.update(AfMode=0, LensPosition=cam.lens_position)     # manual, held there
+            self.focus = None
         if controls and hasattr(self.source, "set_controls"):
             self.source.set_controls(**controls)
         self._save_camera()
@@ -305,14 +321,29 @@ class Station:
         if not hasattr(self.source, "autofocus"):
             return False
         self.source.autofocus()
+        self.focus = "focusing"
 
         def remember():
-            time.sleep(2.5)
+            # The lens moves for a second or two. Read before the camera says it
+            # is done, the position is wherever the scan had got to: on the Pi
+            # that once kept 0.1 m for a wall 0.2 m away.
+            scanned = False
+            state = None
+            for _ in range(60):                 # metadata comes every 16th frame; 6 s in all
+                time.sleep(0.1)
+                state = (getattr(self.source, "metadata", {}) or {}).get("AfState")
+                scanned = scanned or state == AF_SCANNING
+                if scanned and state in (AF_FOCUSED, AF_FAILED):
+                    break
             lens = (getattr(self.source, "metadata", {}) or {}).get("LensPosition")
-            if lens is not None:
-                self.camera.lens_position = round(float(lens), 3)
-                self._save_camera()
-                self.note(f"focused at {1 / max(lens, 1e-3):.1f} m")
+            self.focus = "focused" if state == AF_FOCUSED else "failed"
+            if lens is None:
+                return
+            self.camera.lens_position = round(float(lens), 3)
+            self._save_camera()
+            where = "far away" if lens < 0.05 else f"{1 / lens:.1f} m"
+            self.note(f"focused at {where}" if self.focus == "focused" else
+                      f"autofocus found nothing sharp; the lens stays at {where}")
         threading.Thread(target=remember, daemon=True).start()
         return True
 
@@ -329,7 +360,8 @@ class Station:
             "lens_actual": round(meta["LensPosition"], 3) if "LensPosition" in meta else None,
             "lux": round(meta["Lux"], 1) if "Lux" in meta else None,
             "brightness": self.brightness,
-            "too_dark": bool(self.brightness is not None and self.brightness < 60 and self.camera.gain >= 15.9),
+            "focus": self.focus,
+            "too_dark":bool(self.brightness is not None and self.brightness < 60 and self.camera.gain >= 15.9),
         }
 
     def _upright_size(self):
@@ -411,6 +443,8 @@ class Station:
             "clock": {"offset_s": round(self.clock_offset, 1), "now": datetime.fromtimestamp(self.now()).isoformat(
                 timespec="seconds")},
             "brightness": self.brightness,
+            "uptime_s": round(time.monotonic() - self.started),
+            "incidents": self.incidents[-10:],
         }
 
     def live_payload(self):
@@ -507,8 +541,59 @@ class Station:
                     self._measure_brightness()
                 except Exception as e:          # never let this take the station down
                     log.debug("brightness: %r", e)
+                self._watch_camera(s, now)
             if tick % 10 == 1:
                 self.system = _system_state(self.data_dir)
+
+    def _watch_camera(self, s, now):
+        """End the station when the camera has stopped sending frames.
+
+        On the Pi 4B the Camera Module 3 has stopped for good, with no error,
+        20 s after it was opened. picamera2 then waits for the next
+        frame forever, and the app went on showing the last picture at 0 fps
+        until the Pi was switched off. Stopping a camera whose driver has hung
+        can hang as well, so the process ends, systemd starts it again, and the
+        camera is opened afresh. What happened is kept in incidents.json and
+        shown in the app.
+        """
+        if self.cfg.camera != "pi" or self.error is not None or self._stop.is_set():
+            return
+        session, frames, since = self._watched
+        if session is not s or frames != s.frames_in:
+            self._watched = (s, s.frames_in, now)
+            return
+        limit = FIRST_FRAME_S if frames == 0 else STALL_S
+        if now - since < limit:
+            return
+        what = ("the camera sent no picture after it was opened" if frames == 0 else
+                f"the camera stopped sending pictures after {frames} frames")
+        self.add_incident(f"{what}; the station restarted")
+        self.note(f"{what}: restarting the station")
+        logging.shutdown()
+        self.exit(75)
+
+    def _load_incidents(self):
+        try:
+            with open(os.path.join(self.data_dir, "incidents.json")) as fh:
+                return list(json.load(fh))[-KEEP_INCIDENTS:]
+        except (OSError, ValueError, TypeError):
+            return []
+
+    def add_incident(self, what):
+        """Note something that went wrong, so that it is still known after a restart."""
+        self.incidents.append({"at": datetime.fromtimestamp(self.now()).isoformat(timespec="seconds"),
+                               "what": what})
+        del self.incidents[:-KEEP_INCIDENTS]
+        try:
+            os.makedirs(self.data_dir, exist_ok=True)
+            tmp = os.path.join(self.data_dir, "incidents.json.tmp")
+            with open(tmp, "w") as fh:
+                json.dump(self.incidents, fh)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, os.path.join(self.data_dir, "incidents.json"))
+        except OSError as e:
+            log.warning("incidents: %r", e)
 
     def _measure_brightness(self):
         s = self.session
