@@ -17,6 +17,10 @@ fragmented one loses only its last fragment.
 Each segment has a JSON file beside it with what the video cannot hold: the
 sensor time of its first frame, its keyframes, and how the camera was turned.
 Timestamps inside a segment start at zero.
+
+A segment can be kept: marked in its JSON, it is deleted for space only when
+nothing else is left to delete. The app keeps the last minutes when the lifter
+says a set was missed, since those are the recordings worth most.
 """
 
 import json
@@ -98,6 +102,28 @@ def list_segments(directory, current=None):
         info.update(name=name, path=path, bytes=size, recording=(path == current))
         out.append(info)
     return out
+
+
+def _mark(info, reason):
+    if reason:
+        info["keep"] = reason
+    else:
+        info.pop("keep", None)
+
+
+def keep_segment(directory, name, reason):
+    """Mark a finished segment as kept, or reason None to let it go; False if there is none."""
+    path = segment_path(directory, name)
+    if path is None:
+        return False
+    try:
+        with open(path[:-4] + ".json") as fh:
+            info = json.load(fh)
+    except (OSError, ValueError):
+        info = {}
+    _mark(info, reason)
+    _write_json(path[:-4] + ".json", info)
+    return True
 
 
 def segment_path(directory, name):
@@ -184,6 +210,46 @@ class Recorder:
         """Every segment on disk, oldest first, with its JSON if it has one."""
         return list_segments(self.directory, self.current())
 
+    def keep(self, name, reason):
+        """Keep a segment from being deleted for space; reason None lets it go again."""
+        path = segment_path(self.directory, name)
+        if path is None:
+            return False
+        with self._lock:
+            current = self._current if self._current is not None and self._current.path == path else None
+            if current is None:
+                return keep_segment(self.directory, name, reason)
+            # the segment writes its JSON again when it closes, from this
+            _mark(current.info, reason)
+            _write_json(path[:-4] + ".json", current.info)
+        return True
+
+    def keep_recent(self, seconds, reason):
+        """Keep the segments that hold the last `seconds`; their names."""
+        kept = []
+        now = time.monotonic()
+        segments = self.segments()
+        current = [s for s in segments if s["recording"]]
+        done = [s for s in segments if not s["recording"]]
+        if current:
+            kept.append(current[0]["name"])
+        if done and (not current or now - self._opened_at < seconds):
+            kept.append(done[-1]["name"])
+        for name in kept:
+            self.keep(name, reason)
+        return kept
+
+    def find(self, sensor_start_us, sensor_end_us):
+        """The finished segment that holds this span of sensor time, or None."""
+        for seg in self.segments():
+            if not seg.get("complete") or seg.get("sensor_origin_us") is None:
+                continue
+            start = seg["sensor_origin_us"] + seg.get("encoder_start_us", 0)
+            end = start + 1e6 * seg.get("duration_s", 0)
+            if start <= sensor_start_us and sensor_end_us <= end:
+                return seg
+        return None
+
     # --- internals ------------------------------------------------------------------
 
     def _new_segment(self):
@@ -217,13 +283,22 @@ class Recorder:
                 self.log(f"recorder: split failed: {e!r}")
 
     def _free_space(self):
-        """Delete the oldest finished segments while the disk is nearly full."""
+        """Delete the oldest finished segments while the disk is nearly full.
+
+        Kept segments go last, and only when there is nothing else: a full
+        card would stop the recording and every set's clip with it.
+        """
         while shutil.disk_usage(self.directory).free < self.min_free_bytes:
             done = [s for s in self.segments() if not s["recording"]]
-            if not done:
+            spare = [s for s in done if not s.get("keep")] or done
+            if not spare:
                 return
-            oldest = done[0]["path"]
-            self.log(f"recorder: disk nearly full, deleting {os.path.basename(oldest)}")
+            oldest = spare[0]["path"]
+            if spare[0].get("keep"):
+                self.log(f"recorder: disk nearly full and only kept recordings left, deleting the oldest "
+                         f"kept one, {os.path.basename(oldest)}")
+            else:
+                self.log(f"recorder: disk nearly full, deleting {os.path.basename(oldest)}")
             for p in (oldest, oldest[:-4] + ".json"):
                 try:
                     os.remove(p)

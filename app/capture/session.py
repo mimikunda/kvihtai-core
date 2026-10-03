@@ -99,6 +99,7 @@ class Session:
         self.analyser = analyser
         self.clock = clock
         self.quarter_turns = quarter_turns  # may be changed while running; a set keeps its own
+        self.tags = None                    # the same: what the lifter said the next set is
         self.results = []
         self.frames_in = 0
         self.analysing = 0                  # sets waiting for or in analysis
@@ -145,6 +146,7 @@ class Session:
 
     def _queue(self, rec):
         rec.quarter_turns = self.quarter_turns
+        rec.tags = dict(self.tags) if self.tags else None
         self.analysing += 1
         self._sets.put(rec)
 

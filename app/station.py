@@ -32,7 +32,7 @@ import cv2
 import numpy as np
 
 from app import logbook, system
-from app.capture.recorder import list_segments
+from app.capture.recorder import keep_segment, list_segments
 from app.capture.session import Session, turn_point
 from app.capture.worker import ProcessAnalyser
 from app.config import Settings
@@ -51,6 +51,8 @@ AF_SCANNING, AF_FOCUSED, AF_FAILED = 1, 2, 3     # libcamera's AfState
 HEARTBEAT_S = 60             # how often run.json says the station is still running
 WATCHDOG_S = 5               # how often systemd hears that it is, see deploy/kvihtai.service
 LOOP_SILENT_S = 30           # the API's event loop silent this long, and systemd is not told
+MISSED_S = 300               # a missed set reported keeps this much of the recording
+MAX_WEIGHT_KG = 500.0
 
 
 @dataclass
@@ -70,6 +72,24 @@ def turn_unit(x, y, quarter_turns):
     """A point given from 0 to 1 across a frame, after turning the frame clockwise."""
     k = quarter_turns % 4
     return [(x, y), (1 - y, x), (1 - x, 1 - y), (y, 1 - x)][k]
+
+
+def clean_tags(changes, old=None):
+    """What the lifter said about a set, checked: a lift name, a weight in kg, a note."""
+    tags = dict(old or {})
+    if "lift" in changes:
+        lift = (changes["lift"] or "").strip()[:40]
+        tags["lift"] = lift or None
+    if "weight_kg" in changes:
+        try:
+            w = float(changes["weight_kg"])
+        except (TypeError, ValueError):
+            w = 0.0
+        tags["weight_kg"] = round(w, 2) if 0 < w <= MAX_WEIGHT_KG else None
+    if "note" in changes:
+        note = (changes["note"] or "").strip()[:500]
+        tags["note"] = note or None
+    return tags
 
 
 def rise_list(result):
@@ -130,6 +150,10 @@ class Station:
         self.exit = os._exit                    # how the station ends itself, see _watch_camera
         self._watched = (None, 0, 0.0)          # (session, frames in, when that number last changed)
         self.log_dir = os.path.join(self.data_dir, "logs")
+        # what the next set will be, as the lifter said: tagged onto it when it ends
+        self.next_set = clean_tags(read_json(os.path.join(self.data_dir, "next_set.json"), {}) or {},
+                                   {"lift": None, "weight_kg": None})
+        self.next_set.pop("note", None)
         self.loop_beat = time.monotonic()       # the API's event loop sets this while it runs, see app.main
         self._run_state = None                  # what run.json holds while running
         for inc in self.incidents[-3:]:
@@ -201,6 +225,7 @@ class Station:
                                        log=self.note, on_result=self._on_result,
                                        clock=self.now, quarter_turns=self.camera.quarter_turns,
                                        analyser=self._analyse, near=self.camera.near_plate)
+                self.session.tags = self.next_set
                 self.error = None
                 self.note(f"camera {self.cfg.camera} starting")
                 if self.camera.lens_position is not None and hasattr(self.source, "set_controls"):
@@ -249,6 +274,10 @@ class Station:
             self.note(f"set {set_id}: no lift in it, not kept")
             self.last_event = ("failed", time.monotonic())
             return
+        tags = getattr(rec, "tags", None)
+        if tags and any(tags.values()):
+            result["tags"] = {"lift": tags.get("lift"), "weight_kg": tags.get("weight_kg"), "note": None}
+            self._write_result(result)
         self.last_set_id = set_id
         self.last_event = ("completed", time.monotonic())
         if self.store is not None:
@@ -289,6 +318,10 @@ class Station:
         t0_ms = result["source_span_s"][0] * 1000 - (want - start) * 1000
         result["video"] = {"url": f"/api/v1/sets/{result['set_id']}/clip.mp4", "t0_ms": round(t0_ms, 1),
                            "recording": seg["name"]}
+        # tags given in the app while the clip was being cut are in the database
+        stored = self.store.get_result(result["set_id"]) if self.store is not None else None
+        if stored is not None and "tags" in stored:
+            result["tags"] = stored["tags"]
         self._write_result(result)
         if self.store is not None:
             self.store.save_result(result["set_id"], result["started_at"], result)
@@ -316,6 +349,29 @@ class Station:
         if gone:
             self.note(f"set {set_id} deleted")
         return gone
+
+    def tag_set(self, set_id, changes):
+        """Say what a set was: its lift, the weight and a note. The set, or None."""
+        result = self.store.get_result(set_id) if self.store is not None else None
+        if result is None:
+            return None
+        result["tags"] = clean_tags(changes, result.get("tags"))
+        self.store.save_result(set_id, result["started_at"], result)
+        self._write_result(result)
+        return result
+
+    def set_next(self, changes):
+        """What the next set will be; every set that ends from now on is tagged with it."""
+        tags = clean_tags({k: v for k, v in changes.items() if k in ("lift", "weight_kg")}, self.next_set)
+        tags.pop("note", None)
+        self.next_set = tags
+        if self.session is not None:
+            self.session.tags = tags
+        try:
+            write_json(os.path.join(self.data_dir, "next_set.json"), tags)
+        except OSError as e:
+            log.warning("next set: %r", e)
+        return tags
 
     def _check_database(self):
         """Fill a database that was made new from the sets on disk."""
@@ -516,6 +572,7 @@ class Station:
             "brightness": self.brightness,
             "uptime_s": round(time.monotonic() - self.started),
             "incidents": self.incidents[-10:],
+            "next_set": self.next_set,
         }
 
     def live_payload(self):
@@ -776,6 +833,42 @@ class Station:
         rec = self.recorder
         return list_segments(self.recordings_dir, rec.current() if rec is not None else None)
 
+    def keep_recording(self, name, reason):
+        rec = self.recorder
+        if rec is not None:
+            return rec.keep(name, reason)
+        return keep_segment(self.recordings_dir, name, reason)
+
+    def report_missed(self):
+        """The lifter says a set was missed: keep the recording of the last minutes. The names kept."""
+        rec = self.recorder
+        if rec is None:
+            return None
+        stamp = datetime.fromtimestamp(self.now()).strftime("%H:%M")
+        kept = rec.keep_recent(MISSED_S, f"missed set reported at {stamp}")
+        self.note(f"a missed set was reported at {stamp}; keeping {', '.join(kept) or 'nothing'}")
+        return kept
+
+    def _measure_brightness(self):
+        s = self.session
+        ring = s.ring if s is not None else None
+        if ring is None or ring.newest < 0:
+            return
+        got = ring.read(ring.newest, step=8)
+        if got is None:
+            return
+        gray = cv2.cvtColor(got[0], cv2.COLOR_BGR2GRAY)
+        self.brightness = int(np.median(gray))
+        cam = self.camera
+        if (not cam.auto_gain or s.live is None or s.live.state != "idle" or s.analysing
+                or not hasattr(self.source, "set_controls")):
+            return
+        # a half step towards the target each time, in the log of the gain
+        want = cam.gain * math.sqrt(TARGET_BRIGHTNESS / max(self.brightness, 4))
+        want = float(min(max(want, MIN_GAIN), 16.0))
+        if abs(math.log(want / cam.gain)) > 0.05:
+            cam.gain = round(want, 2)
+            self.source.set_controls(AnalogueGain=cam.gain)
 
 
 def _ntp_synchronized():

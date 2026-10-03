@@ -29,6 +29,16 @@ class ClockReading(BaseModel):
     epoch_ms: float
 
 
+class NextSet(BaseModel):
+    """What the next set will be; every set that ends from now on is tagged with it."""
+    lift: str | None = None
+    weight_kg: float | None = None
+
+
+class Keep(BaseModel):
+    keep: bool
+
+
 def _station(request: Request):
     station = getattr(request.app.state, "station", None)
     if station is None:
@@ -76,13 +86,24 @@ def recent_log(request: Request) -> list[str]:
     return list(_station(request).lines)
 
 
+@router.get("/api/v1/next-set")
+def next_set(request: Request) -> dict:
+    return _station(request).next_set
+
+
+@router.put("/api/v1/next-set")
+def change_next_set(change: NextSet, request: Request) -> dict:
+    return _station(request).set_next(change.model_dump(exclude_unset=True))
+
+
 @router.get("/api/v1/recordings")
 def recordings(request: Request) -> dict:
     station = _station(request)
     segments = station.recordings()
     return {
         "enabled": station.recorder is not None,
-        "segments": [{k: s.get(k) for k in ("name", "started_at", "bytes", "duration_s", "frames", "recording")}
+        "segments": [{k: s.get(k) for k in ("name", "started_at", "bytes", "duration_s", "frames", "recording",
+                                            "keep")}
                      for s in segments],
         "total_bytes": sum(s["bytes"] for s in segments),
     }
@@ -94,6 +115,23 @@ def recording(name: str, request: Request):
     if path is None:
         raise HTTPException(status_code=404, detail="No such recording")
     return FileResponse(path, media_type="video/mp4", filename=name)
+
+
+@router.put("/api/v1/recordings/{name}")
+def keep_recording(name: str, keep: Keep, request: Request) -> dict:
+    reason = "kept in the app" if keep.keep else None
+    if not _station(request).keep_recording(name, reason):
+        raise HTTPException(status_code=404, detail="No such recording")
+    return {"name": name, "keep": reason}
+
+
+@router.post("/api/v1/missed")
+def missed_set(request: Request) -> dict:
+    """The lifter lifted and no set came: keep the recording of the last minutes."""
+    kept = _station(request).report_missed()
+    if kept is None:
+        raise HTTPException(status_code=409, detail="Nothing is being recorded")
+    return {"kept": kept}
 
 
 @router.websocket("/ws/live")

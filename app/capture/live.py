@@ -83,6 +83,7 @@ class SetRecording:
     started_wall: float = 0.0
     ended: str = ""
     quarter_turns: int = 0         # how the camera stood, see app.capture.session
+    tags: dict | None = None       # what the lifter said was on the bar, see app.station
 
 
 class LiveTracker:

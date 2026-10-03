@@ -104,6 +104,7 @@ def diagnostics(request: Request) -> Response:
                                 "service": system.under_systemd()},
         "camera.json": station.camera_state,
         "incidents.json": lambda: station.incidents,
+        "next_set.json": lambda: station.next_set,
         "boots.json": system.boots,
         "recordings.json": lambda: [{k: v for k, v in s.items() if k != "path"} for s in station.recordings()],
         "sets.json": lambda: [brief(r) for r in store.list_results(1000)] if store is not None else [],
