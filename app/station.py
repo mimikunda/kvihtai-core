@@ -177,7 +177,12 @@ class Station:
         self._clear_run()
         self._stop.set()
         if self.session is not None:
+            # A set still being analysed is given up. Waiting for it held a
+            # shutdown up for over 20 s, until systemd killed the station
+            # before it had closed the recording.
+            self.session.drop_pending = True
             self.session.stop()
+            self.analyser.kill()
         for th in self._threads:
             th.join(timeout=10)
         self.analyser.close()
@@ -262,7 +267,8 @@ class Station:
         try:
             return self.analyser(rec, quarter_turns)
         except Exception as e:
-            self.add_incident(f"a set could not be analysed: {e}", "analysis")
+            if not self._stop.is_set():         # given up on purpose, see stop
+                self.add_incident(f"a set could not be analysed: {e}", "analysis")
             raise
 
     def _on_result(self, rec, result):

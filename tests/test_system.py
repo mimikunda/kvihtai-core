@@ -329,3 +329,38 @@ def test_a_missed_set_keeps_the_last_minutes(client, tmp_path):
     assert client.get("/api/v1/recordings/20261003-080000.mp4").status_code == 200
     assert client.get("/api/v1/recordings/nothing.mp4").status_code == 404
     client.put("/api/v1/recordings/20261003-080000.mp4", json={"keep": False})
+
+
+def test_stopping_does_not_wait_for_a_set_being_analysed(tmp_path):
+    from app.capture.session import Session
+
+    started = threading.Event()
+    release = threading.Event()
+
+    class Slow:
+        """A set that takes half a minute on the Pi, in a worker that can be killed."""
+
+        def __call__(self, rec, quarter_turns):
+            started.set()
+            release.wait(30)
+            raise RuntimeError("the analysis process died")
+
+        kill = staticmethod(release.set)
+
+        def close(self):
+            pass
+
+    station = _station(tmp_path)
+    station.analyser = Slow()
+    session = Session(SimpleNamespace(), str(tmp_path), log=lambda m: None, analyser=station._analyse)
+    station.session = session
+    th = threading.Thread(target=session._analyser)
+    th.start()
+    session._queue(SimpleNamespace(times=[0.0]))
+    session._queue(SimpleNamespace(times=[0.0]))     # waiting behind it
+    started.wait(5)
+    station.stop()
+    session._sets.put(None)
+    th.join(5)
+    assert not th.is_alive()
+    assert station.incidents == []           # given up on purpose, not a fault

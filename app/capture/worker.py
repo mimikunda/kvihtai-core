@@ -53,6 +53,13 @@ class ProcessAnalyser:
             raise RuntimeError(value)
         return value
 
+    def kill(self):
+        """End the worker now, in the middle of a set if need be. Without the
+        lock: a set being analysed holds it, for as long as the analysis takes."""
+        proc = self._proc
+        if proc is not None and proc.is_alive():
+            proc.terminate()
+
     def close(self):
         with self._lock:
             if self._proc is None:

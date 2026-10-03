@@ -101,6 +101,7 @@ class Session:
         self.quarter_turns = quarter_turns  # may be changed while running; a set keeps its own
         self.tags = None                    # the same: what the lifter said the next set is
         self.results = []
+        self.drop_pending = False           # set when stopping must not wait for the analysis
         self.frames_in = 0
         self.analysing = 0                  # sets waiting for or in analysis
         self._stop = threading.Event()
@@ -140,6 +141,9 @@ class Session:
             if rec is None:
                 return
             try:
+                if self.drop_pending:
+                    self.log("set dropped: stopping")
+                    continue
                 self._analyse_one(rec)
             finally:
                 self.analysing -= 1
