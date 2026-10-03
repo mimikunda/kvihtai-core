@@ -75,6 +75,21 @@ def test_the_watcher_follows_the_end_on_the_tapped_side():
     assert live.near_end(far) is far
 
 
+# --- what is watched ---------------------------------------------------------------------
+
+def test_the_watcher_does_not_watch_a_circle_clipped_white():
+    # a window in the sun: round and ringed like a plate, but blown out
+    img = syn.textured_background((640, 480), seed=5)
+    syn.draw_plate(img, (180.0, 300.0), 60.0, face=syn.BLACK)
+    syn.draw_plate(img, (460.0, 300.0), 60.0, face=(255, 255, 255))
+    ring = RingBuffer(2, img.shape)
+    ring.push(img, 0.0)
+    found = LiveTracker(ring, (640, 480), LiveConfig(max_clipped=1.0))._find(0)
+    assert sorted(round(w.x, -1) for w in found) == [180, 460]
+    found = LiveTracker(ring, (640, 480))._find(0)
+    assert [round(w.x, -1) for w in found] == [180]
+
+
 # --- a whole session ---------------------------------------------------------------------
 
 FPS = 60.0
@@ -160,6 +175,17 @@ def test_session_with_the_camera_turned_measures_the_same_lift(set_clip, tmp_pat
     assert len(rises) == 1
     assert rises[0]["height_mm"] == pytest.approx(LIFT_PX * 450.0 / (2 * RADIUS), rel=0.03)
     assert results[0]["frame_size"] == list(set_clip[0].shape[1::-1])      # upright again
+
+
+def test_session_holds_a_set_back_while_another_waits_for_analysis(set_clip, tmp_path):
+    config = LiveConfig(check_every=4, search_every_s=0.25, preroll_s=0.4, rest_s=0.5)
+    logged = []
+    session = Session(PacedSource(set_clip, FPS), str(tmp_path), ring_seconds=1.0,
+                      config=config, log=logged.append)
+    session.analysing = 2               # one set being analysed, one waiting
+    assert session.run() == []
+    assert session.live.stats["held back"] > 0
+    assert sum("not followed" in m for m in logged) == 1, logged
 
 
 @pytest.mark.parametrize("k", [1, 2, 3])

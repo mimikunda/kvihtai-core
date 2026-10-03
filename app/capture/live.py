@@ -21,6 +21,11 @@ to move together. The one followed is the one nearer the camera, which the
 person setting up the station tapped once in the app: near, a point on its
 side of the picture. The far plate is often the easier one to see, but the
 lifter's arms and head cover it.
+
+A circle that is mostly clipped white is not watched. In sunlight through a
+window the search found circles in the blown-out glass and the frame bars
+across it, and their fit wandered by more than the 8 % of a radius that
+counts as moving, so they started set after set.
 """
 
 import math
@@ -47,6 +52,7 @@ class LiveConfig:
     check_every: int = 8           # frames between checks while idle
     search_every_s: float = 1.0    # full-frame search for plates while idle
     min_score: float = 1.0         # coverage + concentricity a watched plate needs
+    max_clipped: float = 0.25      # share of a circle clipped white beyond which it is not watched
     max_watched: int = 4
     move_fraction: float = 0.08    # of the radius: moved this far, the plate is moving
     confirm: int = 2               # consecutive checks that must agree
@@ -60,6 +66,26 @@ class LiveConfig:
                                       # a longer gap is not bridged by the analysis anyway
     max_set_s: float = 180.0
     max_bytes: int = 1_500_000_000  # crops kept per set; a set that would need more is cut
+
+
+def clipped_share(image, x, y, r, level=250):
+    """Share of the pixels inside the circle whose brightest channel is at least level.
+
+    On the 37 phone clips no plate had more than 6 % of its circle clipped.
+    The circles that started sets on a sunlit window at home had 33 to 96 %,
+    most over 70 %. A plate is dark or coloured, and the station exposes for
+    the room, not for the window.
+    """
+    h, w = image.shape[:2]
+    x0, x1 = max(0, int(x - r)), min(w, int(x + r) + 1)
+    y0, y1 = max(0, int(y - r)), min(h, int(y + r) + 1)
+    if x1 <= x0 or y1 <= y0:
+        return 0.0
+    yy, xx = np.mgrid[y0:y1, x0:x1]
+    inside = (xx - x) ** 2 + (yy - y) ** 2 <= r * r
+    if not inside.any():
+        return 0.0
+    return float((image[y0:y1, x0:x1].max(axis=2)[inside] >= level).mean())
 
 
 @dataclass
@@ -88,7 +114,7 @@ class SetRecording:
 
 class LiveTracker:
     def __init__(self, ring, frame_size, config: LiveConfig | None = None, on_set=None, log=print,
-                 clock=time.time):
+                 clock=time.time, may_start=None):
         self.ring = ring
         self.w, self.h = frame_size
         self.cfg = config or LiveConfig()
@@ -97,6 +123,7 @@ class LiveTracker:
         # half the resolution it gets in a portrait frame.
         self.scale = self.cfg.work_side / min(self.w, self.h)
         self.on_set = on_set
+        self.may_start = may_start         # called before a set starts; False and it is not followed
         self.log = log
         self.clock = clock                 # wall time, for naming sets
         self.watched: list[Watched] = []
@@ -106,7 +133,8 @@ class LiveTracker:
         self._fresh = None                 # a watch list the searcher found, not yet taken up
         self._search_due = -math.inf       # frame time of the next background search
         self._lock = threading.Lock()
-        self.stats = {"checks": 0, "searches": 0, "sets": 0, "lost": 0}
+        self.stats = {"checks": 0, "searches": 0, "sets": 0, "lost": 0, "held back": 0}
+        self._holding = False              # a movement was held back since the last set
 
     # --- helpers ----------------------------------------------------------------
 
@@ -178,6 +206,8 @@ class LiveTracker:
             # in a row, and started a set. A plate waiting to be lifted is in view.
             if min(c.x - r, c.y - r, small.shape[1] - c.x - r, small.shape[0] - c.y - r) < 0:
                 continue
+            if clipped_share(small, c.x, c.y, r) > self.cfg.max_clipped:
+                continue
             found.append((c.score, Watched(c.x / self.scale, c.y / self.scale, r / self.scale)))
         found.sort(key=lambda sw: -sw[0])
         if self.near is not None:
@@ -231,6 +261,8 @@ class LiveTracker:
         c, r = best
         r = rim_radius(small, c.x, c.y, r, 0.20 * h)
         if min(c.x - r, c.y - r, w - c.x - r, h - c.y - r) < 0:
+            return None
+        if clipped_share(small, c.x, c.y, r) > self.cfg.max_clipped:
             return None
         return c.score, Watched(c.x / self.scale, c.y / self.scale, r / self.scale)
 
@@ -433,7 +465,16 @@ class LiveTracker:
                 if self._fresh is not None and not any(w.moved for w in self.watched):
                     self.watched, self._fresh = self._fresh, None
             moved = self.check(seq) if self.watched else None
+            if moved is not None and self.may_start is not None and not self.may_start():
+                moved.moved = 0
+                self.stats["held back"] += 1
+                if not self._holding:
+                    self.log(f"plate at ({moved.x:.0f}, {moved.y:.0f}) r {moved.r:.0f} moved, "
+                             "not followed: the analysis is behind")
+                self._holding = True
+                moved = None
             if moved is not None:
+                self._holding = False
                 moved = self.near_end(moved)
                 idle.clear()
                 self.state = "active"
