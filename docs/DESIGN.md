@@ -358,6 +358,49 @@ boot as a systemd service, and a camera that fails is opened again.
   it opens its own hotspot, `KvihtAI`, and the station is at
   `http://10.42.0.1:8080`. Waiting first matters: an access point is always
   available to NetworkManager, and would win over the home Wi-Fi.
+- **Shutting down.** The Pi was switched off by pulling the plug, which can
+  corrupt the card and loses the open fragment of the recording. The app has
+  Shut down, Reboot and Restart station. Shut down and reboot go through
+  `sudo systemctl`, allowed by `deploy/setup_pi.sh` for exactly those two
+  commands, and only where `KVIHTAI_POWER_CONTROL` is set, so that a laptop
+  running the station is never switched off from a phone. The app follows the
+  station until it stops answering and then counts down the few seconds the Pi
+  needs before it says to unplug.
+- **How the last run ended.** While it runs, the station keeps `run.json` with
+  the boot's id and, once a minute, the time. A clean stop deletes it. Found at
+  start, it says the station was not stopped: from the same boot it crashed or
+  was killed, and the journal is asked whether for memory or by the watchdog;
+  from an earlier boot the Pi went off under it. Either is an incident. The
+  camera restart above deletes it first, since its incident already says why.
+- **Undervoltage and heat** come and go faster than the app polls, so the
+  firmware's since-boot flags are kept as an incident, once a boot.
+- **Logs.** `logs/station.log` on the card, 5 MB at most, holds the station's
+  lines, the camera library's, and every warning and error from the process,
+  a thread that died included. The journal is kept on the card too, 200 MB at
+  most; Raspberry Pi OS keeps it in memory by default, and what led up to a
+  power cut went with it. The app shows both, and the kernel's messages, and
+  can filter them to the problems by their words: the journal gives every line
+  of the service the same priority. uvicorn's access log is off; the status
+  poll filled the journal with it. The app's diagnostics bundle is one zip of
+  the logs, the journal of this boot and the one before, the settings, the
+  incidents and the lists of sets and recordings.
+- **Watchdog.** The station tells systemd every 5 s that it runs, but only
+  while the API's event loop has run in the last 30 s. Silent for 60 s, it is
+  killed and started again. A station that runs but does not answer is no use
+  at the gym.
+- **Files that survive a power cut.** `camera.json`, `result.json`,
+  `incidents.json` and the rest are written to a temporary file, flushed and
+  renamed. A database that cannot be read is moved aside and a new one filled
+  from the sets' `result.json` files; deleting a set deletes its folder, so
+  that it does not come back from there.
+- **What was lifted.** The app says what the next set will be, a lift and a
+  weight, and every set that ends from then on carries it; it is taken when
+  the set ends, as the rotation is. A set's lift, weight and a note can be
+  changed afterwards. With weights given, the history plots each set's best
+  mean velocity against its weight. Sets export as CSV, a row per rise.
+- **Missed sets.** A lifter who lifted and saw no set can say so in the app.
+  The recording of the last five minutes is then kept: deleted for space only
+  when nothing else is left, since it is the footage the watcher most needs.
 
 ## Open Questions
 

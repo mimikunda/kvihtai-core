@@ -77,6 +77,15 @@ It needs `sudo`, and sets up:
   `kvihtai-hotspot`. At boot the Pi waits 40 s for a Wi-Fi it knows. If none
   comes, it opens the Wi-Fi network `KvihtAI`, and the station is at
   `http://10.42.0.1:8080`, or `http://kvihtai.lan:8080`.
+- **`/etc/sudoers.d/kvihtai`**, which lets the station's user run
+  `systemctl poweroff`, `systemctl reboot` and `date -s` without a password,
+  and nothing else: the app's Shut down and Reboot, and the clock set from a
+  phone.
+- **A journal kept across boots**, 200 MB at most, in
+  `/etc/systemd/journald.conf.d/90-kvihtai-persistent.conf`.
+
+Run it again after updating from a version without these; `deploy/push.sh`
+copies the code but does not change the system.
 
 The script prints the hotspot's password. It keeps the existing one when run
 again; set `KVIHTAI_HOTSPOT_PASSWORD` to choose one.
@@ -94,10 +103,9 @@ Logs:
 journalctl -u kvihtai -f
 ```
 
-For the station to set the clock from a phone when there is no internet, the
-service's user needs `sudo` without a password for `date`. Without it, the
-station keeps the difference to the phone's clock itself, and only the names
-of the recordings made before the phone connected are off.
+The station sets the clock from a phone when there is no internet. Without
+the sudo rule above, it keeps the difference to the phone's clock itself, and
+only the names of the recordings made before the phone connected are off.
 
 ## At the gym
 
@@ -107,7 +115,13 @@ of the recordings made before the phone connected are off.
 3. Open `http://10.42.0.1:8080`. Adding it to the home screen gives it an icon.
 4. On **Camera**, turn the picture upright, press **Focus**, and check that the
    plate on the bar is ringed in green while it waits.
-5. Lift. The set shows on **Now** once it has been analysed.
+5. On **Now**, pick the lift and the weight for the next set. Every set that
+   ends from then on carries them; change them between sets.
+6. Lift. The set shows on **Now** once it has been analysed. If a set did not
+   show, **Keep the recording** under it keeps the last five minutes of video.
+7. When done, **Station → Shut down**, and unplug the Pi once the page says
+   so. Pulling the plug without it can damage the card, and the app reports it
+   the next time.
 
 ## Where things are on the Pi
 
@@ -118,8 +132,16 @@ Under `~/kvihtai-data`:
   the gain's noise is hard to compress. The oldest are deleted only when less
   than 5 GB is free.
 - `sets/<start time>/`: each set's `result.json` and `clip.mp4`.
-- `kvihtai.db`: the sets the app shows.
+- `kvihtai.db`: the sets the app shows. If it cannot be read, it is moved
+  aside and filled again from the `result.json` files.
 - `camera.json`: rotation, exposure, gain and focus, as last set in the app.
+- `next_set.json`: the lift and weight the next set will carry.
+- `incidents.json`: what went wrong, shown under **Station → Problems**.
+- `logs/station.log`: the station's log, kept across restarts.
+- `run.json`: there only while the station runs; see DESIGN.md, Station.
+
+**Station → Problems → Download diagnostics** gives one zip with all of the
+above that is not footage, and the journal of this boot and the one before.
 
 Copy the recordings off with, for example:
 
