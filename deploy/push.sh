@@ -14,8 +14,15 @@ TARGET="${1:?usage: deploy/push.sh user@host}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 WEB="${KVIHTAI_WEB:-$HERE/../kvihtai-web}"
 
+# which code this is, for the app's station page and bug reports
+STAMP="$(mktemp -d)"
+trap 'rm -rf "$STAMP"' EXIT
+echo "$(git -C "$HERE" describe --always --dirty 2>/dev/null || echo unknown)" \
+    "$(git -C "$HERE" rev-parse --abbrev-ref HEAD 2>/dev/null), copied $(date '+%Y-%m-%d %H:%M')" \
+    > "$STAMP/VERSION"
+
 rsync -a --delete --exclude __pycache__ \
-    "$HERE/app" "$HERE/tools" "$HERE/deploy" "$HERE/requirements.txt" \
+    "$HERE/app" "$HERE/tools" "$HERE/deploy" "$HERE/requirements.txt" "$STAMP/VERSION" \
     "$TARGET:kvihtai-core/"
 
 if [ -d "$WEB/dist" ]; then

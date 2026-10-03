@@ -10,12 +10,17 @@ Between sets it also keeps the picture bright enough. The exposure stays short
 and fixed, for the reason given in app.capture.source, and the gain follows the
 light. It is never changed during a set: a plate whose brightness changes
 half way through looks less like itself to the analysis.
+
+It also keeps track of itself: what went wrong is kept in incidents.json, its
+log in logs/station.log, and run.json says while it runs that it has not been
+stopped, so that the next start can tell a power cut or a crash from a
+shutdown.
 """
 
-import json
 import logging
 import math
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -26,9 +31,12 @@ from datetime import datetime
 import cv2
 import numpy as np
 
+from app import logbook, system
+from app.capture.recorder import keep_segment, list_segments
 from app.capture.session import Session, turn_point
 from app.capture.worker import ProcessAnalyser
 from app.config import Settings
+from app.files import read_json, write_json
 from app.vision.plate import PLATE_DIAMETER_MM
 
 log = logging.getLogger("kvihtai.station")
@@ -40,6 +48,11 @@ STALL_S = 5.0                # no frame for this long, and the camera has stoppe
 FIRST_FRAME_S = 20.0         # the same, while a camera that was just opened starts
 KEEP_INCIDENTS = 50
 AF_SCANNING, AF_FOCUSED, AF_FAILED = 1, 2, 3     # libcamera's AfState
+HEARTBEAT_S = 60             # how often run.json says the station is still running
+WATCHDOG_S = 5               # how often systemd hears that it is, see deploy/kvihtai.service
+LOOP_SILENT_S = 30           # the API's event loop silent this long, and systemd is not told
+MISSED_S = 300               # a missed set reported keeps this much of the recording
+MAX_WEIGHT_KG = 500.0
 
 
 @dataclass
@@ -59,6 +72,24 @@ def turn_unit(x, y, quarter_turns):
     """A point given from 0 to 1 across a frame, after turning the frame clockwise."""
     k = quarter_turns % 4
     return [(x, y), (1 - y, x), (1 - x, 1 - y), (y, 1 - x)][k]
+
+
+def clean_tags(changes, old=None):
+    """What the lifter said about a set, checked: a lift name, a weight in kg, a note."""
+    tags = dict(old or {})
+    if "lift" in changes:
+        lift = (changes["lift"] or "").strip()[:40]
+        tags["lift"] = lift or None
+    if "weight_kg" in changes:
+        try:
+            w = float(changes["weight_kg"])
+        except (TypeError, ValueError):
+            w = 0.0
+        tags["weight_kg"] = round(w, 2) if 0 < w <= MAX_WEIGHT_KG else None
+    if "note" in changes:
+        note = (changes["note"] or "").strip()[:500]
+        tags["note"] = note or None
+    return tags
 
 
 def rise_list(result):
@@ -118,6 +149,13 @@ class Station:
         self.incidents = self._load_incidents()
         self.exit = os._exit                    # how the station ends itself, see _watch_camera
         self._watched = (None, 0, 0.0)          # (session, frames in, when that number last changed)
+        self.log_dir = os.path.join(self.data_dir, "logs")
+        # what the next set will be, as the lifter said: tagged onto it when it ends
+        self.next_set = clean_tags(read_json(os.path.join(self.data_dir, "next_set.json"), {}) or {},
+                                   {"lift": None, "weight_kg": None})
+        self.next_set.pop("note", None)
+        self.loop_beat = time.monotonic()       # the API's event loop sets this while it runs, see app.main
+        self._run_state = None                  # what run.json holds while running
         for inc in self.incidents[-3:]:
             self.lines.append(f"earlier, {inc['at']}: {inc['what']}")
 
@@ -125,6 +163,9 @@ class Station:
 
     def start(self):
         os.makedirs(self.sets_dir, exist_ok=True)
+        logbook.install(self.log_dir)
+        self._check_last_run()
+        self._check_database()
         if self.cfg.camera != "none":
             self._threads.append(threading.Thread(target=self._run, name="station", daemon=True))
         self._threads.append(threading.Thread(target=self._housekeeping, name="housekeeping", daemon=True))
@@ -132,21 +173,32 @@ class Station:
             th.start()
 
     def stop(self):
+        # first: told to stop is a clean stop, even if stopping then takes too long
+        self._clear_run()
         self._stop.set()
         if self.session is not None:
+            # A set still being analysed is given up. Waiting for it held a
+            # shutdown up for over 20 s, until systemd killed the station
+            # before it had closed the recording.
+            self.session.drop_pending = True
             self.session.stop()
+            self.analyser.kill()
         for th in self._threads:
             th.join(timeout=10)
         self.analyser.close()
+        logbook.uninstall()
 
     def now(self):
         return time.time() + self.clock_offset
 
-    def note(self, message):
+    def note(self, message, level=logging.INFO):
         stamp = datetime.fromtimestamp(self.now()).strftime("%H:%M:%S")
         for line in str(message).splitlines():
             self.lines.append(f"{stamp} {line}")
-        log.info(message)
+        log.log(level, message)
+
+    def warn(self, message):
+        self.note(message, logging.WARNING)
 
     def _make_source(self):
         kind = self.cfg.camera
@@ -177,7 +229,8 @@ class Station:
                 self.session = Session(self.source, self.sets_dir, ring_seconds=4.0,
                                        log=self.note, on_result=self._on_result,
                                        clock=self.now, quarter_turns=self.camera.quarter_turns,
-                                       analyser=self.analyser, near=self.camera.near_plate)
+                                       analyser=self._analyse, near=self.camera.near_plate)
+                self.session.tags = self.next_set
                 self.error = None
                 self.note(f"camera {self.cfg.camera} starting")
                 if self.camera.lens_position is not None and hasattr(self.source, "set_controls"):
@@ -185,10 +238,10 @@ class Station:
                                                                       LensPosition=self.camera.lens_position))
                 self.session.run()
                 if not self._stop.is_set():
-                    self.note("camera stopped; starting it again")
+                    self.warn("camera stopped; starting it again")
             except Exception as e:
                 self.error = repr(e)
-                self.note(f"camera failed: {e!r}")
+                self.warn(f"camera failed: {e!r}")
             finally:
                 self.recorder = None
             self._stop.wait(3.0)
@@ -202,12 +255,21 @@ class Station:
                     try:
                         action()
                     except Exception as e:
-                        self.note(f"camera setting failed: {e!r}")
+                        self.warn(f"camera setting failed: {e!r}")
                     return
                 time.sleep(0.1)
         threading.Thread(target=later, daemon=True).start()
 
     # --- sets -------------------------------------------------------------------------
+
+    def _analyse(self, rec, quarter_turns):
+        """The analyser, with a failure kept as an incident: it is a fault to report."""
+        try:
+            return self.analyser(rec, quarter_turns)
+        except Exception as e:
+            if not self._stop.is_set():         # given up on purpose, see stop
+                self.add_incident(f"a set could not be analysed: {e}", "analysis")
+            raise
 
     def _on_result(self, rec, result):
         """Store an analysed set, and cut its clip from the recording."""
@@ -218,6 +280,10 @@ class Station:
             self.note(f"set {set_id}: no lift in it, not kept")
             self.last_event = ("failed", time.monotonic())
             return
+        tags = getattr(rec, "tags", None)
+        if tags and any(tags.values()):
+            result["tags"] = {"lift": tags.get("lift"), "weight_kg": tags.get("weight_kg"), "note": None}
+            self._write_result(result)
         self.last_set_id = set_id
         self.last_event = ("completed", time.monotonic())
         if self.store is not None:
@@ -238,7 +304,7 @@ class Station:
                 break
             time.sleep(0.25)
         if seg is None:
-            self.note(f"set {result['set_id']}: no finished recording holds it, no clip")
+            self.warn(f"set {result['set_id']}: no finished recording holds it, no clip")
             return
         seg_start = seg["sensor_origin_us"] + seg["encoder_start_us"]
         want = (span[0] - seg_start) / 1e6
@@ -252,36 +318,103 @@ class Station:
                "-c", "copy", "-movflags", "+faststart", out]
         done = subprocess.run(cmd, capture_output=True, text=True)
         if done.returncode != 0:
-            self.note(f"set {result['set_id']}: cutting the clip failed: {done.stderr.strip()[:200]}")
+            self.warn(f"set {result['set_id']}: cutting the clip failed: {done.stderr.strip()[:200]}")
             return
         # the clip's time zero on the set's own clock, which the trajectory uses
         t0_ms = result["source_span_s"][0] * 1000 - (want - start) * 1000
         result["video"] = {"url": f"/api/v1/sets/{result['set_id']}/clip.mp4", "t0_ms": round(t0_ms, 1),
                            "recording": seg["name"]}
-        with open(os.path.join(result["path"], "result.json"), "w") as fh:
-            json.dump(result, fh, indent=1)
+        # tags given in the app while the clip was being cut are in the database
+        stored = self.store.get_result(result["set_id"]) if self.store is not None else None
+        if stored is not None and "tags" in stored:
+            result["tags"] = stored["tags"]
+        self._write_result(result)
         if self.store is not None:
             self.store.save_result(result["set_id"], result["started_at"], result)
             self.store.save_set_summary(contract_summary(result))
 
+    def _set_dir(self, set_id):
+        return os.path.join(self.sets_dir, os.path.basename(set_id))
+
+    def _write_result(self, result):
+        directory = self._set_dir(result["set_id"])
+        if os.path.isdir(directory):
+            write_json(os.path.join(directory, "result.json"), result, indent=1)
+
     def clip_path(self, set_id):
-        path = os.path.join(self.sets_dir, os.path.basename(set_id), "clip.mp4")
+        path = os.path.join(self._set_dir(set_id), "clip.mp4")
         return path if os.path.exists(path) else None
+
+    def delete_set(self, set_id):
+        """Forget a set, and delete its files, so that it cannot come back from them."""
+        gone = self.store.delete_result(set_id) if self.store is not None else False
+        directory = self._set_dir(set_id)
+        if os.path.basename(set_id) and os.path.isdir(directory):
+            shutil.rmtree(directory, ignore_errors=True)
+            gone = True
+        if gone:
+            self.note(f"set {set_id} deleted")
+        return gone
+
+    def tag_set(self, set_id, changes):
+        """Say what a set was: its lift, the weight and a note. The set, or None."""
+        result = self.store.get_result(set_id) if self.store is not None else None
+        if result is None:
+            return None
+        result["tags"] = clean_tags(changes, result.get("tags"))
+        self.store.save_result(set_id, result["started_at"], result)
+        self._write_result(result)
+        return result
+
+    def set_next(self, changes):
+        """What the next set will be; every set that ends from now on is tagged with it."""
+        tags = clean_tags({k: v for k, v in changes.items() if k in ("lift", "weight_kg")}, self.next_set)
+        tags.pop("note", None)
+        self.next_set = tags
+        if self.session is not None:
+            self.session.tags = tags
+        try:
+            write_json(os.path.join(self.data_dir, "next_set.json"), tags)
+        except OSError as e:
+            log.warning("next set: %r", e)
+        return tags
+
+    def _check_database(self):
+        """Fill a database that was made new from the sets on disk."""
+        if self.store is None or not hasattr(self.store, "health"):
+            return
+        health = self.store.health()
+        if health["broken"]:
+            self.add_incident(f"the database could not be read and was started again; the broken one is "
+                              f"{health['broken']}", "storage")
+        if not health["created"]:
+            return
+        added = 0
+        for name in sorted(os.listdir(self.sets_dir)):
+            result = read_json(os.path.join(self.sets_dir, name, "result.json"))
+            if not isinstance(result, dict) or "set_id" not in result or not rise_list(result):
+                continue
+            try:
+                self.store.save_result(result["set_id"], result["started_at"], result)
+                self.store.save_set_summary(contract_summary(result))
+                added += 1
+            except Exception as e:              # one bad file must not stop the rest
+                log.warning("set %s could not be added again: %r", name, e)
+        if added:
+            self.note(f"the database was new: {added} sets added again from the card")
 
     # --- the camera -------------------------------------------------------------------
 
     def _load_camera(self):
+        data = read_json(os.path.join(self.data_dir, "camera.json"))
         try:
-            with open(os.path.join(self.data_dir, "camera.json")) as fh:
-                data = json.load(fh)
             return CameraSettings(**{k: v for k, v in data.items() if k in CameraSettings.__dataclass_fields__})
-        except (OSError, ValueError, TypeError):
+        except (AttributeError, TypeError):
             return CameraSettings()
 
     def _save_camera(self):
         os.makedirs(self.data_dir, exist_ok=True)
-        with open(os.path.join(self.data_dir, "camera.json"), "w") as fh:
-            json.dump(asdict(self.camera), fh)
+        write_json(os.path.join(self.data_dir, "camera.json"), asdict(self.camera))
 
     def update_camera(self, **changes):
         cam = self.camera
@@ -445,6 +578,7 @@ class Station:
             "brightness": self.brightness,
             "uptime_s": round(time.monotonic() - self.started),
             "incidents": self.incidents[-10:],
+            "next_set": self.next_set,
         }
 
     def live_payload(self):
@@ -523,8 +657,13 @@ class Station:
     def _housekeeping(self):
         counts = deque(maxlen=10)               # (time, frames in, frames the camera made), 5 s of them
         tick = 0
+        system.notify("READY=1")
         while not self._stop.wait(0.5):
             tick += 1
+            try:
+                self._keep_alive(tick)
+            except Exception as e:              # never let this take the station down
+                log.warning("keeping alive: %r", e)
             s = self.session
             now = time.monotonic()
             if s is not None:
@@ -543,7 +682,8 @@ class Station:
                     log.debug("brightness: %r", e)
                 self._watch_camera(s, now)
             if tick % 10 == 1:
-                self.system = _system_state(self.data_dir)
+                self.system = system.vitals(self.data_dir)
+                self._note_power_trouble()
 
     def _watch_camera(self, s, now):
         """End the station when the camera has stopped sending frames.
@@ -567,33 +707,153 @@ class Station:
             return
         what = ("the camera sent no picture after it was opened" if frames == 0 else
                 f"the camera stopped sending pictures after {frames} frames")
-        self.add_incident(f"{what}; the station restarted")
-        self.note(f"{what}: restarting the station")
+        self.add_incident(f"{what}; the station restarted", "camera")
+        self.warn(f"{what}: restarting the station")
+        # the incident says why; run.json would have the next start report a crash
+        self._clear_run()
         logging.shutdown()
         self.exit(75)
 
     def _load_incidents(self):
-        try:
-            with open(os.path.join(self.data_dir, "incidents.json")) as fh:
-                return list(json.load(fh))[-KEEP_INCIDENTS:]
-        except (OSError, ValueError, TypeError):
-            return []
+        got = read_json(os.path.join(self.data_dir, "incidents.json"), [])
+        return list(got)[-KEEP_INCIDENTS:] if isinstance(got, list) else []
 
-    def add_incident(self, what):
+    def add_incident(self, what, kind=None):
         """Note something that went wrong, so that it is still known after a restart."""
-        self.incidents.append({"at": datetime.fromtimestamp(self.now()).isoformat(timespec="seconds"),
-                               "what": what})
+        incident = {"at": datetime.fromtimestamp(self.now()).isoformat(timespec="seconds"), "what": what}
+        if kind:
+            incident["kind"] = kind
+        self.incidents.append(incident)
         del self.incidents[:-KEEP_INCIDENTS]
+        log.warning("incident: %s", what)
+        self._save_incidents()
+
+    def clear_incidents(self):
+        self.incidents = []
+        self._save_incidents()
+        self.note("incidents cleared from the app")
+
+    def _save_incidents(self):
         try:
             os.makedirs(self.data_dir, exist_ok=True)
-            tmp = os.path.join(self.data_dir, "incidents.json.tmp")
-            with open(tmp, "w") as fh:
-                json.dump(self.incidents, fh)
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.replace(tmp, os.path.join(self.data_dir, "incidents.json"))
+            write_json(os.path.join(self.data_dir, "incidents.json"), self.incidents)
         except OSError as e:
             log.warning("incidents: %r", e)
+
+    # --- how the last run ended -----------------------------------------------------------
+
+    def _run_path(self):
+        return os.path.join(self.data_dir, "run.json")
+
+    def _check_last_run(self):
+        """Tell from run.json whether the station was stopped last time, and if not, why not.
+
+        A run.json left behind means the process ended without being stopped.
+        In the same boot it crashed, ran out of memory or was killed; in an
+        earlier boot the computer went off under it, which is nearly always
+        the plug pulled without shutting down.
+        """
+        last = read_json(self._run_path())
+        boot = system.boot_id()
+        now = datetime.fromtimestamp(self.now()).isoformat(timespec="seconds")
+        same_boot = isinstance(last, dict) and last.get("boot_id") == boot
+        self._run_state = {"boot_id": boot, "pid": os.getpid(), "started": now, "seen": now,
+                           "noted": list(last.get("noted", [])) if same_boot else []}
+        if isinstance(last, dict):
+            seen = str(last.get("seen") or last.get("started") or "")
+            at = seen[11:16] if len(seen) >= 16 else "an unknown time"
+            day = "" if seen[:10] == now[:10] else f" on {seen[:10]}"
+            if boot is not None and last.get("boot_id") not in (None, boot):
+                self.add_incident(f"the Pi went off at about {at}{day} without being shut down", "power")
+            else:
+                why = system.last_exit_reason()
+                self.add_incident(f"the station stopped unexpectedly at about {at}{day}"
+                                  f"{f' ({why})' if why else ''} and was started again", "crash")
+        self._write_run()
+
+    def _write_run(self):
+        if self._run_state is None:
+            return
+        try:
+            os.makedirs(self.data_dir, exist_ok=True)
+            write_json(self._run_path(), self._run_state)
+        except OSError as e:
+            log.warning("run.json: %r", e)
+
+    def _clear_run(self):
+        self._run_state = None
+        try:
+            os.remove(self._run_path())
+        except OSError:
+            pass
+
+    def _keep_alive(self, tick):
+        """Say that the station still runs: to run.json now and then, to systemd often."""
+        if self._run_state is not None and tick % int(HEARTBEAT_S / 0.5) == 0:
+            self._run_state["seen"] = datetime.fromtimestamp(self.now()).isoformat(timespec="seconds")
+            self._write_run()
+        # only while the API answers too: a station that shows nothing is no use
+        if tick % int(WATCHDOG_S / 0.5) == 0 and time.monotonic() - self.loop_beat < LOOP_SILENT_S:
+            system.notify("WATCHDOG=1")
+
+    def _note_power_trouble(self):
+        """Keep undervoltage and overheating as incidents, once a boot: they come and go too fast to see."""
+        if self._run_state is None:
+            return
+        for flag, kind, what in (
+                ("undervoltage_since_boot", "undervoltage",
+                 "the power supply's voltage dropped too low (undervoltage); use the official supply "
+                 "and a short cable"),
+                ("throttled_since_boot", "heat", "the Pi got too hot and slowed itself down")):
+            if self.system.get(flag) and kind not in self._run_state["noted"]:
+                self._run_state["noted"].append(kind)
+                self.add_incident(what, kind)
+                self._write_run()
+
+    # --- power and recordings, from the app ----------------------------------------------
+
+    def power_abilities(self):
+        return system.power_abilities(self.cfg.power_control)
+
+    def power(self, action):
+        """Restart the station, or reboot or shut down the computer. (accepted, why not)."""
+        can = self.power_abilities()
+        if not can.get(action):
+            return False, can["why"].get(action, "not possible")
+        words = {"restart": "restarting the station", "reboot": "rebooting the Pi",
+                 "shutdown": "shutting the Pi down"}[action]
+        self.note(f"{words}, as asked in the app")
+
+        def later():
+            time.sleep(1.0)                     # let the answer reach the phone first
+            if action == "restart":
+                system.restart_self()
+                return
+            failed = system.power(action)
+            if failed:
+                self.add_incident(f"{words} failed: {failed}", "power")
+        threading.Thread(target=later, name="power", daemon=True).start()
+        return True, None
+
+    def recordings(self):
+        rec = self.recorder
+        return list_segments(self.recordings_dir, rec.current() if rec is not None else None)
+
+    def keep_recording(self, name, reason):
+        rec = self.recorder
+        if rec is not None:
+            return rec.keep(name, reason)
+        return keep_segment(self.recordings_dir, name, reason)
+
+    def report_missed(self):
+        """The lifter says a set was missed: keep the recording of the last minutes. The names kept."""
+        rec = self.recorder
+        if rec is None:
+            return None
+        stamp = datetime.fromtimestamp(self.now()).strftime("%H:%M")
+        kept = rec.keep_recent(MISSED_S, f"missed set reported at {stamp}")
+        self.note(f"a missed set was reported at {stamp}; keeping {', '.join(kept) or 'nothing'}")
+        return kept
 
     def _measure_brightness(self):
         s = self.session
@@ -624,27 +884,3 @@ def _ntp_synchronized():
         return out.stdout.strip() == "yes"
     except (OSError, subprocess.SubprocessError):
         return False
-
-
-def _system_state(path):
-    state = {}
-    try:
-        with open("/sys/class/thermal/thermal_zone0/temp") as fh:
-            state["temp_c"] = round(int(fh.read()) / 1000, 1)
-    except OSError:
-        pass
-    try:
-        out = subprocess.run(["vcgencmd", "get_throttled"], capture_output=True, text=True, timeout=2)
-        value = int(out.stdout.strip().split("=")[1], 16)
-        state["throttled_now"] = bool(value & 0x4)
-        state["throttled_since_boot"] = bool(value & 0x40000)
-        state["undervoltage"] = bool(value & 0x1)
-    except (OSError, subprocess.SubprocessError, IndexError, ValueError):
-        pass
-    try:
-        st = os.statvfs(path)
-        state["free_bytes"] = st.f_bavail * st.f_frsize
-    except OSError:
-        pass
-    state["load"] = round(os.getloadavg()[0], 2)
-    return state

@@ -13,7 +13,6 @@ a set are turned upright, before the analysis, which needs to know where
 gravity points.
 """
 
-import json
 import os
 import queue
 import threading
@@ -26,6 +25,7 @@ import numpy as np
 from app.analysis.report import summarise
 from app.capture.live import LiveConfig, LiveTracker
 from app.capture.ring import RingBuffer
+from app.files import write_json
 from app.vision import tracker
 from app.vision.frames import Crops
 
@@ -99,7 +99,9 @@ class Session:
         self.analyser = analyser
         self.clock = clock
         self.quarter_turns = quarter_turns  # may be changed while running; a set keeps its own
+        self.tags = None                    # the same: what the lifter said the next set is
         self.results = []
+        self.drop_pending = False           # set when stopping must not wait for the analysis
         self.frames_in = 0
         self.analysing = 0                  # sets waiting for or in analysis
         self._stop = threading.Event()
@@ -139,12 +141,16 @@ class Session:
             if rec is None:
                 return
             try:
+                if self.drop_pending:
+                    self.log("set dropped: stopping")
+                    continue
                 self._analyse_one(rec)
             finally:
                 self.analysing -= 1
 
     def _queue(self, rec):
         rec.quarter_turns = self.quarter_turns
+        rec.tags = dict(self.tags) if self.tags else None
         self.analysing += 1
         self._sets.put(rec)
 
@@ -177,8 +183,7 @@ class Session:
         directory = os.path.join(self.out_dir, stamp)
         result["set_id"] = stamp
         os.makedirs(directory, exist_ok=True)
-        with open(os.path.join(directory, "result.json"), "w") as fh:
-            json.dump(result, fh, indent=1)
+        write_json(os.path.join(directory, "result.json"), result, indent=1)
         if self.keep_frames:
             # crops differ in size at the frame's edge, so they are kept one by one
             np.savez_compressed(os.path.join(directory, "frames.npz"),
