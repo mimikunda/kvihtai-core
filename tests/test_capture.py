@@ -177,6 +177,17 @@ def test_session_with_the_camera_turned_measures_the_same_lift(set_clip, tmp_pat
     assert results[0]["frame_size"] == list(set_clip[0].shape[1::-1])      # upright again
 
 
+def test_session_holds_a_set_back_while_another_waits_for_analysis(set_clip, tmp_path):
+    config = LiveConfig(check_every=4, search_every_s=0.25, preroll_s=0.4, rest_s=0.5)
+    logged = []
+    session = Session(PacedSource(set_clip, FPS), str(tmp_path), ring_seconds=1.0,
+                      config=config, log=logged.append)
+    session.analysing = 2               # one set being analysed, one waiting
+    assert session.run() == []
+    assert session.live.stats["held back"] > 0
+    assert sum("not followed" in m for m in logged) == 1, logged
+
+
 @pytest.mark.parametrize("k", [1, 2, 3])
 def test_turning_a_recording_moves_crops_with_the_frame(k):
     rng = np.random.default_rng(k)

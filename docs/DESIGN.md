@@ -329,6 +329,14 @@ boot as a systemd service, and a camera that fails is opened again.
   before it was being analysed lost more than half of its frames. The crops go
   to the worker one at a time and are dropped as they go, so a set is never in
   memory twice. The worker runs at a lower priority.
+- **One set waits, not more.** A plate that starts to move while one set is
+  being analysed and another waits is not followed; the log says so, and the
+  recording still has it. One morning the watcher started 180 s sets on a
+  sunlit window every three minutes, each took 10 to 12 minutes to analyse
+  on the Pi 4B, and each waited in memory for its turn.
+  Holding back every set until the one before is analysed would lose real
+  ones: a 25 s set takes two to three minutes there, about the rest before
+  the next.
 - **A camera that stops.** On the Pi 4B the Camera Module 3 has stopped
   sending frames for good, with no error, 20 s after it was opened. picamera2
   then waits for the next frame forever, and the app showed the last picture

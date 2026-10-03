@@ -114,7 +114,7 @@ class SetRecording:
 
 class LiveTracker:
     def __init__(self, ring, frame_size, config: LiveConfig | None = None, on_set=None, log=print,
-                 clock=time.time):
+                 clock=time.time, may_start=None):
         self.ring = ring
         self.w, self.h = frame_size
         self.cfg = config or LiveConfig()
@@ -123,6 +123,7 @@ class LiveTracker:
         # half the resolution it gets in a portrait frame.
         self.scale = self.cfg.work_side / min(self.w, self.h)
         self.on_set = on_set
+        self.may_start = may_start         # called before a set starts; False and it is not followed
         self.log = log
         self.clock = clock                 # wall time, for naming sets
         self.watched: list[Watched] = []
@@ -132,7 +133,8 @@ class LiveTracker:
         self._fresh = None                 # a watch list the searcher found, not yet taken up
         self._search_due = -math.inf       # frame time of the next background search
         self._lock = threading.Lock()
-        self.stats = {"checks": 0, "searches": 0, "sets": 0, "lost": 0}
+        self.stats = {"checks": 0, "searches": 0, "sets": 0, "lost": 0, "held back": 0}
+        self._holding = False              # a movement was held back since the last set
 
     # --- helpers ----------------------------------------------------------------
 
@@ -463,7 +465,16 @@ class LiveTracker:
                 if self._fresh is not None and not any(w.moved for w in self.watched):
                     self.watched, self._fresh = self._fresh, None
             moved = self.check(seq) if self.watched else None
+            if moved is not None and self.may_start is not None and not self.may_start():
+                moved.moved = 0
+                self.stats["held back"] += 1
+                if not self._holding:
+                    self.log(f"plate at ({moved.x:.0f}, {moved.y:.0f}) r {moved.r:.0f} moved, "
+                             "not followed: the analysis is behind")
+                self._holding = True
+                moved = None
             if moved is not None:
+                self._holding = False
                 moved = self.near_end(moved)
                 idle.clear()
                 self.state = "active"

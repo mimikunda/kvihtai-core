@@ -154,6 +154,18 @@ class Session:
         self.analysing += 1
         self._sets.put(rec)
 
+    def _room(self):
+        """Whether a new set may start: not while a set already waits for the analysis.
+
+        On the Pi 4 a 180 s set on a sunlit window took 10 to 12 minutes to
+        analyse, and such sets came every three minutes. Each waited in memory
+        for its turn, and the watcher and the analysis fought over the CPU.
+        Waiting for the analysis before every set would lose real ones: a 25 s
+        set takes two to three minutes there, about as long as the rest before
+        the next. So one set may wait, not more.
+        """
+        return self.analysing < 2
+
     def _analyse_one(self, rec):
         t0 = time.monotonic()
         try:
@@ -206,7 +218,7 @@ class Session:
         self.log(f"camera {w}x{h} at {fps:.0f} fps; ring buffer {capacity} frames, "
                  f"{self.ring.nbytes / 1e6:.0f} MB")
         self.live = LiveTracker(self.ring, (w, h), self.config, on_set=self._queue, log=self.log,
-                                clock=self.clock)
+                                clock=self.clock, may_start=self._room)
         self.set_near(self.near)
         threads = [threading.Thread(target=self._camera, name="camera", daemon=True),
                    threading.Thread(target=self.live.run, args=(self._stop,), name="watcher", daemon=True),
