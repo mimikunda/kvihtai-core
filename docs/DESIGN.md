@@ -365,7 +365,10 @@ boot as a systemd service, and a camera that fails is opened again.
   commands, and only where `KVIHTAI_POWER_CONTROL` is set, so that a laptop
   running the station is never switched off from a phone. The app follows the
   station until it stops answering and then counts down the few seconds the Pi
-  needs before it says to unplug.
+  needs before it says to unplug. Stopping gives up a set still being
+  analysed: waiting for it held a restart up past systemd's 20 s, and the
+  station was killed before it had closed the recording. A stop during a set
+  now takes about a second on the Pi 4B.
 - **How the last run ended.** While it runs, the station keeps `run.json` with
   the boot's id and, once a minute, the time. A clean stop deletes it. Found at
   start, it says the station was not stopped: from the same boot it crashed or
