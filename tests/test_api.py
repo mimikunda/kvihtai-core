@@ -75,6 +75,17 @@ def test_camera_settings_are_kept(client):
     client.put("/api/v1/camera", json={"quarter_turns": 0})
 
 
+def test_the_near_plate_is_kept_as_the_camera_sees_it(client):
+    client.put("/api/v1/camera", json={"quarter_turns": 1})
+    # tapped on the right of the upright picture, half way down
+    assert client.put("/api/v1/camera", json={"near_plate": [0.9, 0.5]}).json()["near_plate"] == [0.9, 0.5]
+    with open(os.path.join(settings.data_dir, "camera.json")) as fh:
+        assert json.load(fh)["near_plate"] == [0.5, 0.1]        # the camera lies on its side
+    # turned back, the point stays on the plate, now as the camera's own frame shows it
+    assert client.put("/api/v1/camera", json={"quarter_turns": 0}).json()["near_plate"] == [0.5, 0.1]
+    assert client.put("/api/v1/camera", json={"near_plate": []}).json()["near_plate"] is None
+
+
 def test_no_picture_and_no_focus_without_a_camera(client):
     assert client.get("/api/v1/camera/preview.jpg").status_code == 503
     assert client.post("/api/v1/camera/focus").status_code == 409

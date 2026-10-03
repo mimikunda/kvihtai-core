@@ -9,8 +9,12 @@ Writes one CSV row per frame in which the plate was fitted, accepted or not,
 with the reason for every rejection, and prints a summary of the set: the
 camera angle, the scale, and every movement with its rises.
 
+With the camera off to the side both ends of the bar are in view; --near
+says which side of the picture the plate nearer the camera is on, left or
+right, and that one is followed. Without it, whichever end is easier to see.
+
 Usage:
-    .venv/bin/python tools/track_plate.py FOOTAGE.mp4 --csv trajectory.csv
+    .venv/bin/python tools/track_plate.py FOOTAGE.mp4 --csv trajectory.csv [--near left|right]
 """
 
 import argparse
@@ -60,11 +64,16 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("video")
     p.add_argument("--csv", default="trajectory.csv")
+    p.add_argument("--near", choices=["left", "right"], help="side of the picture the nearer plate is on")
     args = p.parse_args(argv if argv is not None else sys.argv[1:])
 
     frames = read_video(args.video)
+    near = None
+    if args.near:
+        w, h = frames.frame_size
+        near = (0.0 if args.near == "left" else float(w), h / 2.0)
     try:
-        st = tracker.track(frames)
+        st = tracker.track(frames, near=near)
     except ValueError as e:
         raise SystemExit(f"{args.video}: {e}")
     acc = st.accepted

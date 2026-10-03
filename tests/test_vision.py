@@ -18,7 +18,7 @@ from app.vision import appearance
 from app.vision.candidates import Candidate, concentricity, find_candidates, rim_radius
 from app.vision.edges import ray_edges, rim_patch, to_lab
 from app.vision.outline import Outline, fit_outline, learn_outline, recentre, sectors_covered
-from app.vision.path import anchor, best_path
+from app.vision.path import anchor, best_path, nearer, other_end
 from app.vision.plate import max_step_px
 import synthetic as syn
 
@@ -176,6 +176,32 @@ class TestPath:
         path = best_path(cands, times, radius)
         assert path[0] is not None and path[2] is not None
         assert path[1] is None
+
+    def test_finds_the_other_end_of_the_bar_and_which_end_is_near(self):
+        # followed: the far plate, at x 100; the near one, larger, at x 300,
+        # seen in half the frames and a little lower as the bar tilts; a
+        # static ring on a storage tree, and a knee seen once
+        track = [(i, (100.0, 300.0 - 4.0 * i, 40.0)) for i in range(0, 80, 4)]
+        detections = []
+        for k, (i, (x, y, r)) in enumerate(track):
+            circles = [(x, y, r), (500.0, 60.0, 40.0)]
+            if k % 2 == 0:
+                circles.append((x + 200.0 + 0.2 * k, y + 10.0 - 0.3 * k, 50.0))
+            if k == 7:
+                circles.append((x - 90.0, y + 150.0, 30.0))
+            detections.append((i, circles))
+        other = other_end(detections, track)
+        assert other is not None and len(other) == 10
+        assert all(abs(x - 300.0) < 5.0 and r == 50.0 for _, (x, y, r) in other)
+        assert not nearer(track, other, (720.0, 400.0))      # a tap on the right: the other end
+        assert nearer(track, other, (0.0, 400.0))
+        assert nearer(other, track, (720.0, 400.0))
+
+    def test_no_other_end_when_the_far_plate_is_hidden(self):
+        track = [(i, (100.0, 300.0 - 4.0 * i, 40.0)) for i in range(0, 80, 4)]
+        detections = [(i, [(x, y, r)] + ([(x + 150.0, y + 20.0, 30.0)] if k == 3 else []))
+                      for k, (i, (x, y, r)) in enumerate(track)]
+        assert other_end(detections, track) is None
 
 
 class TestAppearance:
