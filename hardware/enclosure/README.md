@@ -1,11 +1,19 @@
 # Camera enclosure
 
-A 3D-printed enclosure that holds a Raspberry Pi 5 with the official Active
-Cooler and a Raspberry Pi Camera Module 3 in one box. It is built in FreeCAD from
-a Python script, checked against Raspberry Pi's own STEP models, and printed
-without supports on a Prusa Core One with a 0.4 mm nozzle.
+A 3D-printed enclosure that holds a Raspberry Pi and a Raspberry Pi Camera
+Module 3 in one box. The same script builds it for two boards:
 
-![Standing, as used](out/render/standing_3q.png)
+- **Raspberry Pi 5** with the official Active Cooler, in `out/pi5/`.
+- **Raspberry Pi 4 Model B** with the fan from the Raspberry Pi 4 Case Fan, in
+  `out/pi4b/`.
+
+Both are built in FreeCAD from a Python script, checked against STEP models of
+the board and the camera, and printed without supports on a Prusa Core One with
+a 0.4 mm nozzle.
+
+| Pi 5 | Pi 4 Model B |
+| --- | --- |
+| ![Pi 5 version, standing](out/pi5/render/standing_3q.png) | ![Pi 4 version, standing](out/pi4b/render/standing_3q.png) |
 
 ## How it is used
 
@@ -15,20 +23,24 @@ vertical, so the image is portrait, which suits a lifter filmed from the side.
 
 `rpicam` can only rotate by 0 or 180 degrees, so the 90 degree turn to portrait
 is done in software, for example `cv2.rotate`. The mount fixes the rotation, so
-it is a constant. Check its direction once with a test frame.
+it is a constant. Check its direction once with a test frame. Both versions
+hold the camera the same way round, so the turn is the same for both.
 
-Outside size: 91 x 69.5 x 29.7 mm (wide, tall, deep, when standing).
+Outside size, wide x tall x deep when standing: 91 x 69.5 x 29.7 mm for the
+Pi 5, 91 x 69.5 x 28.3 mm for the Pi 4.
 
-| Side, when standing | What is there |
-| --- | --- |
-| Front | Lens, fan intake grille, name |
-| Top | USB-C power, both micro-HDMI, vent slots |
-| Bottom | 1/4"-20 tripod nut |
-| Left, seen from the front | USB 3.0, USB 2.0, Ethernet |
-| Right, seen from the front | microSD, power button, status LED, blower exhaust slots |
-| Back | Four screw heads, vent slots under the board |
+| Side, when standing | Pi 5 | Pi 4 Model B |
+| --- | --- | --- |
+| Front | Lens, fan intake grille, name | Lens, fan intake grille, name |
+| Top | USB-C power, both micro-HDMI, vent slots | USB-C power, both micro-HDMI, audio jack, vent slots |
+| Bottom | 1/4"-20 tripod nut | 1/4"-20 tripod nut |
+| Left, seen from the front, top to bottom | Ethernet, USB 3.0, USB 2.0 | USB 2.0, USB 3.0, Ethernet |
+| Right, seen from the front | microSD, power button, status LED, blower exhaust slots | microSD, power and activity LEDs, vent slots |
+| Back | Four screw heads, vent slots under the board | Four screw heads, vent slots under the board |
 
 ## Parts
+
+### Pi 5
 
 | Qty | Part | Notes |
 | --- | --- | --- |
@@ -40,37 +52,98 @@ Outside size: 91 x 69.5 x 29.7 mm (wide, tall, deep, when standing).
 | 4 | M2 x 5 or M2 x 6 screw | Hold the camera. Not longer than 6 mm, or it comes out of the front face. |
 | 1 | 1/4"-20 UNC hex nut | 11.1 mm across flats, the standard tripod thread. |
 
-The M2.5 and M2 screws cut their own thread in the plastic. No inserts are
-needed.
-
 **Camera cable.** The camera sits right above the Pi's camera connector, so the
 cable is short and does not fold. The design is checked for a 38 mm cable,
 which lies in a small loop up towards the lid. The 200 mm cable that comes with
 the Camera Module 3 for the Pi 5 does not fit neatly. Other short lengths are
 not checked.
 
+### Pi 4 Model B
+
+| Qty | Part | Notes |
+| --- | --- | --- |
+| 1 | Raspberry Pi 4 Model B | |
+| 1 | Fan from the Raspberry Pi 4 Case Fan | Taken out of its clear housing. 25 x 25 x 6 mm. See the cooling note below. |
+| 1 | Raspberry Pi Camera Module 3, standard lens | For the wide lens, build with `KVIHTAI_CAMERA=wide`. |
+| 1 | Camera cable, 100 mm, 15-way 1 mm pitch at both ends | The contacts must be on opposite sides at the two ends. See the note below. |
+| 4 | M2.5 x 12 socket head screw, DIN 912 | Hold the Pi and close the box. 10 to 16 mm also fits. |
+| 4 | M2 x 5 or M2 x 6 screw | Hold the camera. Not longer than 6 mm, or it comes out of the front face. |
+| 4 | M2 x 8 screw | Hold the fan, through its corner holes. Not longer than 10 mm. |
+| 1 | 1/4"-20 UNC hex nut | 11.1 mm across flats, the standard tripod thread. |
+
+**Camera cable.** The Pi 4 takes the cable with its contacts facing the
+micro-HDMI sockets, and the camera takes it with its contacts facing the camera
+board. A flat cable cannot twist on the way between them, so which way round
+the camera has to sit depends on the cable. This version is built for a cable
+whose contacts are on opposite sides at its two ends: looking at one face of
+the cable, you see one blue stiffener. The camera then sits towards the microSD
+end with its connector facing the Pi's camera connector.
+
+The cable runs straight for 7 mm out of the camera's connector and 10 mm out of
+the Pi's before it bends. The first print bent it right at both latches, and
+libcamera then often found the focus data in a frame unreadable, 9 times in
+the first minute after the camera was opened. With the cable straight it did
+not once in 12 hours.
+
+From the camera the cable turns down and back under the camera, turns down
+again and comes forward below that, then rises, goes over the top and comes
+straight down into the Pi's connector. The modelled path is 96 mm, counting the
+ends inside both connectors, against 100 mm of cable. The rest makes the loops
+rounder. Other lengths are not checked.
+
+A cable with its contacts on the same side at both ends would need the camera
+turned round, as the first version of this enclosure had it. That is not
+supported now.
+
+**Cooling.** The Pi 4 slows its CPU at 80 °C. In Jeff Geerling's test of the
+Case Fan, a Pi 4 under a 20-minute CPU stress test started to throttle after
+about 9 minutes without the fan, and not at all with it. The live tracker needs
+13 to 23 ms a frame on the Pi 4 against 12.5 ms between frames at 80 fps (see
+`docs/DESIGN.md`), so the Pi 4 has no headroom, and throttling costs frames. A
+two-hour training session is far longer than it takes to heat up. The fan sits
+in the lid over the SoC and the memory. It draws air in through the grille in
+the front face and blows it onto the board, and the air leaves through the vent
+slots.
+
+The 18 x 18 x 10 mm heatsink that comes with the Case Fan does not fit under
+the fan. A heatsink up to 6 mm tall would, but with the fan it is not needed.
+
+The fan is switched by GPIO 14. Add this line to `/boot/firmware/config.txt`,
+which turns it on at 60 °C:
+
+```
+dtoverlay=gpio-fan,gpiopin=14,temp=60000
+```
+
+GPIO 14 is also the serial console's transmit pin, so the serial console must
+be off.
+
 ## Printing
 
-Open `out/print/enclosure.3mf` in PrusaSlicer. It holds all three parts on one
-plate, already turned the way they print, with the settings they need stored
-per part. Select these profiles, slice, and print:
+Open `out/pi5/print/enclosure.3mf` or `out/pi4b/print/enclosure.3mf` in
+PrusaSlicer. Each holds all the parts on one plate, already turned the way they
+print, with the settings they need stored per part. Select these profiles,
+slice, and print:
 
 - Printer: Prusa CORE One HF0.4 nozzle.
 - Print: `0.20mm STRUCTURAL @COREONE 0.4`.
 - Filament: `Prusament PETG @COREONE HF0.4`, or another PETG. PLA is not
-  recommended next to a warm Pi 5.
+  recommended next to a warm Pi.
 
-The whole plate takes about 2 h 30 min and 49 g of PETG (PrusaSlicer 2.9
-estimate).
+PrusaSlicer 2.9 estimates, with those profiles:
 
-| Part | Lies on | Time alone | Filament |
-| --- | --- | --- | --- |
-| Base | its back | 1 h 42 min | 30.8 g |
-| Lid | its front face | 52 min | 18.2 g |
-| Button pin | its collar | 1 min | 0.1 g |
+| Board | Part | Lies on | Time alone | Filament |
+| --- | --- | --- | --- | --- |
+| Pi 5 | Base | its back | 1 h 42 min | 30.8 g |
+| Pi 5 | Lid | its front face | 51 min | 18.0 g |
+| Pi 5 | Button pin | its collar | 1 min | 0.1 g |
+| Pi 5 | Whole plate | | 2 h 29 min | 49.0 g |
+| Pi 4 | Base | its back | 1 h 38 min | 29.2 g |
+| Pi 4 | Lid | its front face | 51 min | 17.9 g |
+| Pi 4 | Whole plate | | 2 h 24 min | 47.2 g |
 
 The settings stored in the project, if you slice the single STLs in
-`out/print/` instead:
+`out/<board>/print/` instead:
 
 - Perimeters: 3.
 - Bottom solid layers: 5. The back and the front face are 2 mm thick. With the
@@ -85,8 +158,8 @@ A satin or textured sheet gives the best-looking front.
 
 Details that let it print without supports:
 
-- Every horizontal hole (LED window, power button, tripod thread) is a
-  teardrop with a 45 degree roof.
+- Every small horizontal hole (LED windows, power button, tripod thread) is a
+  teardrop with a 45 degree roof. The port openings are bridged.
 - The counterbores for the screw heads have two sacrificial bridge layers.
   After printing, push a screw through to break them if they did not open.
 - The vent slots in the side walls are vertical when printing.
@@ -94,6 +167,8 @@ Details that let it print without supports:
   showing.
 
 ## Assembly
+
+### Pi 5
 
 1. Fit the Active Cooler to the Pi 5 and plug in its fan. Route the fan cable
    round the lid post at the mounting hole between the GPIO header and the USB
@@ -117,18 +192,54 @@ Details that let it print without supports:
    through the base and the Pi and cut into the posts of the lid. Tighten
    gently; the lid clamps the Pi against the standoffs.
 
+### Pi 4 Model B
+
+1. Take the fan out of the Case Fan's clear housing. Screw it onto the four
+   posts inside the lid with the M2 x 8 screws through its corner holes, label
+   facing away from the lid, the way it sits in the official case. It then
+   draws air in through the grille.
+2. Drop the 1/4"-20 nut into the slot in the block on the GPIO-side wall.
+3. Plug one end of the cable into the Pi's camera connector, between the
+   micro-HDMI sockets and the audio jack, contacts facing the micro-HDMI
+   sockets.
+4. Lower the Pi into the base, USB and Ethernet end first and tilted, so the
+   ports go into their openings. Then lower the other end flat onto the four
+   standoffs.
+5. Screw the camera onto the four standoffs inside the lid with the M2 x 5 or
+   M2 x 6 screws, lens through the round opening. Its connector then faces
+   the middle of the lid.
+6. Plug the other end of the cable into the camera, contacts facing the camera
+   board.
+7. Push the fan leads onto the GPIO header: red on pin 4, black on pin 6, blue
+   on pin 8. Pins 4, 6 and 8 are the second, third and fourth pins of the row
+   along the board edge, counted from the microSD end.
+8. Close the lid, with the cable laid in two loops under the camera: straight
+   out of the camera for 7 mm, then down and back under the camera, down again
+   and forward along the board, then up, over and straight down into the Pi's
+   connector. Keep the first 7 mm out of each connector straight. The lid's
+   lip goes inside the walls, and a tab on the lid rests on the tripod nut.
+9. Turn the box over and fit the four M2.5 screws from the back. They pass
+   through the base and the Pi and cut into the posts of the lid. Tighten
+   gently; the lid clamps the Pi against the standoffs.
+
 ## Checks
 
-`check.py` loads Raspberry Pi's STEP models of the Pi 5 and the Camera Module 3
-and tests the printed parts against them. With the current parameters:
+`check.py` loads STEP models of the board and of the Camera Module 3 and tests
+the printed parts against them. With the current parameters, for both boards:
 
-- No overlap between any printed part and the Pi, the camera, the Active
-  Cooler or the camera cable. The cable is also checked against the cooler, the
-  Pi and the camera.
+- No overlap between any printed part and the Pi, the camera, the cooler or
+  fan, or the camera cable. The cable, outside the two connectors it plugs
+  into, is also checked against the Pi, the camera and the cooler or fan.
 - Nothing in the base reaches over the outline of the Pi, so the Pi can be
   lowered in.
+- The lens has room to move to focus. The lid is checked against the lens
+  moved 0.5 mm forward, about twice what focusing at 10 cm takes. The first
+  printed lid had a hole round the lens barrel only; its edge sat on the cone
+  of the moving lens behind the barrel, and the lens could not move.
 
-Smallest gaps, from `out/check/report.json`:
+Smallest gaps, from `out/<board>/check/report.json`.
+
+Pi 5:
 
 | Between | Gap | Where |
 | --- | --- | --- |
@@ -136,39 +247,82 @@ Smallest gaps, from `out/check/report.json`:
 | Lid and Pi components | 0.83 mm | same post |
 | Camera connector and cooler | 0.41 mm | over the blower |
 | Camera cable and lid | 0.36 mm | top of the cable loop |
-| Camera cable and cooler | 0.95 mm | over the blower |
+| Camera cable and cooler | 1.19 mm | where the cable comes down past the blower |
+| Lens, moved to focus, and lid | 0.54 mm | round the lens barrel |
 | Button pin and Pi power button | 0.25 mm | free play before the pin presses |
 | Standoffs and Pi board | 0.03 mm | the board rests on the standoffs |
 
 The modelled cable path is 35 mm, counting the ends inside both connectors,
 against 38 mm of cable, so the cable is not pulled tight.
 
-The wide-lens build is only checked for valid geometry. Raspberry Pi's STEP
+Pi 4 Model B:
+
+| Between | Gap | Where |
+| --- | --- | --- |
+| Lid lip and USB 3.0 stack | 0.45 mm | notch in the lip over the stack |
+| Camera and fan | 0.70 mm | edge of the camera board next to the fan |
+| Camera cable and lid | 0.38 mm | top of the loop over the Pi's camera connector |
+| Camera cable and Pi components | 2.10 mm | lower loop, over the second micro-HDMI socket |
+| Camera cable and camera | 1.78 mm | upper loop, under the camera's cable connector |
+| Lens, moved to focus, and lid | 0.54 mm | round the lens barrel |
+| Fan and GPIO pins | 1.46 mm | corner of the fan next to the header |
+| Fan leads and lid | 2.0 mm | room for the leads to bend over |
+| Standoffs and Pi board | 0 mm | the board rests on the pads round its mounting holes |
+
+The fan is 7.3 mm above the SoC. The camera cable runs straight for 7.0 mm out
+of the camera's connector and 10.2 mm out of the Pi's.
+
+The Pi 4 model is not Raspberry Pi's, which publishes none for the Pi 4. It is
+the one on [step.parts](https://www.step.parts/parts/raspberry_pi_4_model_b),
+and it agrees with Raspberry Pi's mechanical drawing on every part the
+enclosure is built round: each is where the drawing puts it, and as tall or
+within 0.1 mm of it, except the USB 2.0 stack, which is 0.4 mm lower. The
+enclosure uses the taller of the two. Its micro-HDMI sockets and
+one USB stack are open surfaces, which cannot be tested for overlap, so the
+check replaces each with its bounding box. The power and activity LEDs are not
+in the model; their windows are placed from the drawing.
+
+The wide-lens builds are only checked for valid geometry. Raspberry Pi's STEP
 model is of the standard lens, so the wide lens is not tested against the lid.
 
-Renders and cross-sections are in `out/render/`.
+Renders and cross-sections are in `out/<board>/render/`.
 
 ## Limits
 
 - The Active Cooler is not in Raspberry Pi's STEP model. It is modelled as an
   envelope from its mechanical drawing, with every height taken as an upper
   bound.
+- The Case Fan's fan is modelled as a 25 x 25 x 6 mm block, the size given in
+  [Raspberry Pi's product brief](https://datasheets.raspberrypi.com/case-fan/case-fan-product-brief.pdf)
+  and [Jeff Geerling's review](https://www.jeffgeerling.com/blog/2020/raspberry-pi-4-has-fan-now-case-fan/).
+  Its corner holes are taken to be on a 20 mm square, the usual spacing for a
+  25 mm fan. None of this is measured. The fan leads' Dupont housings are
+  taken as 14 mm tall, and they set the height of the Pi 4 lid.
+- The Pi 4's temperature in the box with the fan has not been measured.
 - The camera cable is modelled as a path, not simulated. Its real shape
   depends on how it is folded in.
 - Hole sizes assume PETG on a Core One. Other printers or materials may need
   the pilot holes in `enclosure.py` opened up or closed down by 0.1 mm.
-- Nothing here has been printed yet.
+- The Pi 4 version was printed once, in the layout before this one. It had two
+  faults, both fixed here: the lid held the lens, so the camera could not
+  focus, and the camera cable was bent at both connectors. This layout has not
+  been printed.
+- The Pi 5 version's cable still bends right at both connectors, as the Pi 4
+  version's did. It has not been printed, and its path has not been changed.
 
 ## Rebuilding
 
-The design is `enclosure.py`; all dimensions are in `Params` at the top.
+The design is `enclosure.py`. The dimensions shared by both boards are in
+`Params`, and the ones that differ are in `BOARD_PARAMS`. Every
+script builds the Pi 5 version unless `KVIHTAI_BOARD=pi4b` is set.
 
 ```sh
-freecad.cmd build.py      # writes out/*.step, out/enclosure.FCStd, out/print/
-freecad.cmd check.py      # downloads the vendor models into ref/ on first run
-python render.py          # needs numpy and opencv, writes out/render/*.png
+freecad.cmd build.py                      # writes out/pi5/*.step, out/pi5/enclosure.FCStd, out/pi5/print/
+KVIHTAI_BOARD=pi4b freecad.cmd build.py   # the same for the Pi 4, in out/pi4b/
+freecad.cmd check.py                      # downloads the models into ref/ on first run
+python render.py                          # needs numpy and opencv, writes out/pi5/render/*.png
 ```
 
 `KVIHTAI_CAMERA=wide freecad.cmd build.py` builds the lid for the wide-angle
-camera, 1.2 mm deeper. The STEP files in `out/` hold the parts in their
+camera, 1.2 mm deeper. The STEP files in `out/<board>/` hold the parts in their
 assembled position for use in other CAD programs.
