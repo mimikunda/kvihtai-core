@@ -14,15 +14,23 @@ Environment="PATH=@VENV@/bin:/usr/local/bin:/usr/bin:/bin"
 Environment=KVIHTAI_CAMERA=pi
 Environment=KVIHTAI_DATA_DIR=@HOME@/kvihtai-data
 Environment=KVIHTAI_WEB_DIR=@HOME@/kvihtai-web/dist
+# the app may shut the Pi down and reboot it; deploy/setup_pi.sh allows the sudo it needs
+Environment=KVIHTAI_POWER_CONTROL=1
 EnvironmentFile=-@HOME@/kvihtai-core/.env
 
 # One process: the camera belongs to it. uvicorn directly, not gunicorn, since
-# there is only ever one worker.
-ExecStart=@VENV@/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8080
+# there is only ever one worker. No access log: the app asks for the status
+# every second, and the journal would hold little else.
+ExecStart=@VENV@/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --no-access-log
 
 Restart=always
 RestartSec=3
 TimeoutStopSec=20
+
+# The station tells systemd every few seconds that it still runs and answers;
+# silent for a minute, it is killed and started again. See app.station.
+WatchdogSec=60
+NotifyAccess=main
 
 # Resource guardrails. The ring buffer takes about 1 GB at 60 fps and a set's
 # crops up to 1.5 GB more, so the limits are a share of the memory rather than

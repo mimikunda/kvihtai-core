@@ -13,7 +13,6 @@ a set are turned upright, before the analysis, which needs to know where
 gravity points.
 """
 
-import json
 import os
 import queue
 import threading
@@ -26,6 +25,7 @@ import numpy as np
 from app.analysis.report import summarise
 from app.capture.live import LiveConfig, LiveTracker
 from app.capture.ring import RingBuffer
+from app.files import write_json
 from app.vision import tracker
 from app.vision.frames import Crops
 
@@ -177,8 +177,7 @@ class Session:
         directory = os.path.join(self.out_dir, stamp)
         result["set_id"] = stamp
         os.makedirs(directory, exist_ok=True)
-        with open(os.path.join(directory, "result.json"), "w") as fh:
-            json.dump(result, fh, indent=1)
+        write_json(os.path.join(directory, "result.json"), result, indent=1)
         if self.keep_frames:
             # crops differ in size at the frame's edge, so they are kept one by one
             np.savez_compressed(os.path.join(directory, "frames.npz"),

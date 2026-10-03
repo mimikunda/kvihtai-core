@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     record_segment_s: float = 300.0
     record_min_free_gb: float = 5.0
 
+    # Whether the app may shut the computer down or reboot it. Off by default,
+    # so that a laptop running the station is never switched off from a phone;
+    # deploy/kvihtai.service switches it on for the Pi.
+    power_control: bool = False
+
     # The built web app (kvihtai-web's dist/), served at /. Nothing is served if it is missing.
     web_dir: Path = ROOT.parent / "kvihtai-web" / "dist"
 

@@ -26,6 +26,8 @@ import threading
 import time
 from datetime import datetime
 
+from app.files import write_json
+
 SEGMENT_OPTIONS = {"movflags": "frag_keyframe+empty_moov+default_base_moof"}
 
 
@@ -71,10 +73,38 @@ def _segment_output_class():
 
 
 def _write_json(path, data):
-    tmp = path + ".tmp"
-    with open(tmp, "w") as fh:
-        json.dump(data, fh)
-    os.replace(tmp, path)
+    write_json(path, data)
+
+
+def list_segments(directory, current=None):
+    """Every segment in directory, oldest first, with its JSON if it has one."""
+    out = []
+    if not os.path.isdir(directory):
+        return out
+    for name in sorted(os.listdir(directory)):
+        if not name.endswith(".mp4"):
+            continue
+        path = os.path.join(directory, name)
+        info = {}
+        try:
+            with open(path[:-4] + ".json") as fh:
+                info = json.load(fh)
+        except (OSError, ValueError):
+            pass
+        try:
+            size = os.path.getsize(path)
+        except OSError:                      # deleted for space meanwhile
+            continue
+        info.update(name=name, path=path, bytes=size, recording=(path == current))
+        out.append(info)
+    return out
+
+
+def segment_path(directory, name):
+    """The segment called name in directory, or None; never a path outside it."""
+    name = os.path.basename(name)
+    path = os.path.join(directory, name)
+    return path if name.endswith(".mp4") and os.path.isfile(path) else None
 
 
 class Recorder:
@@ -152,34 +182,7 @@ class Recorder:
 
     def segments(self):
         """Every segment on disk, oldest first, with its JSON if it has one."""
-        out = []
-        if not os.path.isdir(self.directory):
-            return out
-        for name in sorted(os.listdir(self.directory)):
-            if not name.endswith(".mp4"):
-                continue
-            path = os.path.join(self.directory, name)
-            info = {}
-            try:
-                with open(path[:-4] + ".json") as fh:
-                    info = json.load(fh)
-            except (OSError, ValueError):
-                pass
-            info.update(name=name, path=path, bytes=os.path.getsize(path),
-                        recording=(path == self.current()))
-            out.append(info)
-        return out
-
-    def find(self, sensor_start_us, sensor_end_us):
-        """The finished segment that holds this span of sensor time, or None."""
-        for seg in self.segments():
-            if not seg.get("complete") or seg.get("sensor_origin_us") is None:
-                continue
-            start = seg["sensor_origin_us"] + seg.get("encoder_start_us", 0)
-            end = start + 1e6 * seg.get("duration_s", 0)
-            if start <= sensor_start_us and sensor_end_us <= end:
-                return seg
-        return None
+        return list_segments(self.directory, self.current())
 
     # --- internals ------------------------------------------------------------------
 

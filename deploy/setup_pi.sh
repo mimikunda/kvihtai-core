@@ -10,6 +10,10 @@
 #                    and the web app on port 8080
 #   the hotspot      Wi-Fi "KvihtAI", opened at boot when no known Wi-Fi is in
 #                    range; the station is then at http://10.42.0.1:8080
+#   permissions      sudo without a password for exactly what the app does:
+#                    shut down, reboot, and set the clock from a phone
+#   the journal      kept on the card across boots, 200 MB at most, so that
+#                    what came before a power cut or a hang can still be read
 #
 # Environment:
 #   VENV                       virtualenv to run in (default ~/kvihtai-core/.venv)
@@ -36,6 +40,23 @@ render() {
 echo "== station service"
 render "$HERE/kvihtai.service" | sudo tee /etc/systemd/system/kvihtai.service >/dev/null
 mkdir -p "$HOME/kvihtai-data"
+
+echo "== permissions"
+RULES="$(mktemp)"
+SYSTEMCTL="$(command -v systemctl)"
+DATE="$(command -v date)"
+echo "$USER ALL=(root) NOPASSWD: $SYSTEMCTL poweroff, $SYSTEMCTL reboot, $DATE -s *" > "$RULES"
+sudo visudo -cqf "$RULES"
+sudo install -m 0440 -o root -g root "$RULES" /etc/sudoers.d/kvihtai
+rm -f "$RULES"
+# the app shows the journal; the adm group may read all of it
+sudo usermod -aG adm "$USER"
+
+echo "== journal"
+sudo mkdir -p /etc/systemd/journald.conf.d
+printf '[Journal]\nStorage=persistent\nSystemMaxUse=200M\n' |
+    sudo tee /etc/systemd/journald.conf.d/90-kvihtai-persistent.conf >/dev/null
+sudo systemctl restart systemd-journald
 
 echo "== hotspot"
 PASSWORD="${KVIHTAI_HOTSPOT_PASSWORD:-}"

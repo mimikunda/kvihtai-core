@@ -1,6 +1,7 @@
 import json
 
 from app.api.schemas import SetSummary
+from app.db import database
 from app.db.database import get_connection
 
 
@@ -87,3 +88,8 @@ def save_set_summary(data: dict) -> None:
         save_set(SetSummary.model_validate(data))
     else:
         save_set(SetSummary.parse_obj(data))
+
+
+def health() -> dict:
+    """Whether the database was made new at start, and the name a broken one was moved to."""
+    return {"created": database.CREATED, "broken": database.BROKEN}

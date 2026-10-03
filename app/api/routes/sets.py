@@ -9,7 +9,7 @@ from app.db import repository
 router = APIRouter(tags=["sets"])
 
 
-def _brief(result: dict) -> dict:
+def brief(result: dict) -> dict:
     """A set without its trajectory, for lists."""
     rises = [r for mv in result.get("movements", []) for r in mv["rises"]]
     return {
@@ -18,10 +18,18 @@ def _brief(result: dict) -> dict:
         "duration_ms": result.get("duration_ms"),
         "frames": result.get("frames"),
         "measured": result.get("measured"),
+        "lost_frames": result.get("lost_frames", 0),
         "camera": result.get("camera"),
         "rises": rises,
         "has_video": bool(result.get("video")),
     }
+
+
+def _station(request: Request):
+    station = getattr(request.app.state, "station", None)
+    if station is None:
+        raise HTTPException(status_code=503, detail="The station is not running")
+    return station
 
 
 @router.get("/api/v1/sets/latest", response_model=SetSummary)
@@ -34,7 +42,7 @@ def get_latest_set() -> SetSummary:
 
 @router.get("/api/v1/sets")
 def list_sets(limit: int = 100) -> list[dict]:
-    return [_brief(r) for r in repository.list_results(limit)]
+    return [brief(r) for r in repository.list_results(limit)]
 
 
 @router.get("/api/v1/sets/{set_id}")
@@ -47,8 +55,8 @@ def get_set(set_id: str) -> dict:
 
 
 @router.delete("/api/v1/sets/{set_id}")
-def delete_set(set_id: str) -> dict:
-    if not repository.delete_result(set_id):
+def delete_set(set_id: str, request: Request) -> dict:
+    if not _station(request).delete_set(set_id):
         raise HTTPException(status_code=404, detail="No such set")
     return {"deleted": set_id}
 

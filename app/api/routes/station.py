@@ -3,8 +3,10 @@
 import asyncio
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
+
+from app.capture.recorder import segment_path
 
 router = APIRouter(tags=["station"])
 
@@ -77,14 +79,21 @@ def recent_log(request: Request) -> list[str]:
 @router.get("/api/v1/recordings")
 def recordings(request: Request) -> dict:
     station = _station(request)
-    rec = station.recorder
-    segments = rec.segments() if rec is not None else []
+    segments = station.recordings()
     return {
-        "enabled": rec is not None,
+        "enabled": station.recorder is not None,
         "segments": [{k: s.get(k) for k in ("name", "started_at", "bytes", "duration_s", "frames", "recording")}
                      for s in segments],
         "total_bytes": sum(s["bytes"] for s in segments),
     }
+
+
+@router.get("/api/v1/recordings/{name}")
+def recording(name: str, request: Request):
+    path = segment_path(_station(request).recordings_dir, name)
+    if path is None:
+        raise HTTPException(status_code=404, detail="No such recording")
+    return FileResponse(path, media_type="video/mp4", filename=name)
 
 
 @router.websocket("/ws/live")
