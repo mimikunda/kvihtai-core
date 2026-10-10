@@ -30,16 +30,15 @@ def test_follows_a_plate_of_any_colour_past_a_ring(colour):
 
 
 def test_finds_the_face_inside_a_visible_tread():
-    """The silhouette's centre is half the tread off; the face's is on the bar."""
+    """The outline's centre is half the tread off, 3.4 px; the face's is on the bar."""
     tread = (-6.0, -3.0)
     frames, times, truth = syn.rising_clip(n=30, face=syn.RED, tread=tread)
     st = run(frames, times)
     acc = st.accepted
     assert len(acc) >= 27
     face_err = np.median([np.hypot(m.face_x - truth[m.frame][0], m.face_y - truth[m.frame][1]) for m in acc])
-    outline_err = np.median([np.hypot(m.x - truth[m.frame][0], m.y - truth[m.frame][1]) for m in acc])
-    assert outline_err > 2.0          # the outline is the silhouette, tread and all
     assert face_err < 0.5, face_err
+    assert np.median([m.scale for m in acc]) == pytest.approx(50.0, abs=0.5)    # the face, not the outline
 
 
 def test_scale_and_bar_path_in_millimetres():

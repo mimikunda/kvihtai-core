@@ -34,7 +34,7 @@ COLUMNS = ["frame", "t_ms", "accepted", "reason",
            "cx_px", "cy_px", "major_px", "minor_px", "angle_deg",
            "x_mm", "y_mm", "vx_m_s", "vy_m_s",
            "mm_per_px", "outline_x_px", "outline_y_px", "scale_px",
-           "residual_px", "sectors", "similarity"]
+           "residual_px", "sectors", "rays", "sleeve_x_px", "sleeve_y_px"]
 
 
 def write_csv(path, st, t, pos, vel):
@@ -57,7 +57,9 @@ def write_csv(path, st, t, pos, vel):
                         round(face.major * m.scale, 2), round(face.minor * m.scale, 2),
                         round(face.angle_deg, 1), *xy, *v,
                         round(m.mm_per_px, 4), round(m.x, 2), round(m.y, 2), round(m.scale, 2),
-                        round(m.residual, 3), m.sectors, round(m.similarity, 3)])
+                        round(m.residual, 3), m.sectors, m.rays,
+                        "" if np.isnan(m.sleeve_x) else round(m.sleeve_x, 1),
+                        "" if np.isnan(m.sleeve_y) else round(m.sleeve_y, 1)])
 
 
 def main(argv=None):
