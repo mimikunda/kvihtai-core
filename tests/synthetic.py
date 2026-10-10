@@ -20,6 +20,7 @@ YELLOW = (40, 200, 220)
 GREEN = (60, 160, 40)
 HUB = (150, 150, 150)
 SLEEVE = (210, 210, 210)
+TUBE = (120, 120, 120)
 
 
 def _fx(v):
@@ -55,12 +56,14 @@ def _region(image, cx, cy, reach):
 
 
 def draw_plate(image, centre, radius, face=BLACK, tread=None, tread_colour=None,
-               ratio=1.0, angle_deg=90.0, hub=HUB):
+               ratio=1.0, angle_deg=90.0, hub=HUB, sleeve=None):
     """A plate: tread (if any), face, hub and sleeve end, on image, in place.
 
     tread is the image offset of the far face from the near one, in pixels.
     ratio and angle_deg shape the face as an ellipse with the major axis at
-    angle_deg.
+    angle_deg. sleeve is the image offset of the sleeve's end from the face
+    centre: it stands out towards the camera, and parallax moves it away from
+    the tread. Without it the end sits on the centre.
     """
     reach = radius + 4 + (0 if tread is None else math.hypot(*tread))
     x0, y0, x1, y1 = _region(image, centre[0], centre[1], reach)
@@ -79,7 +82,11 @@ def draw_plate(image, centre, radius, face=BLACK, tread=None, tread_colour=None,
     cv2.ellipse(big, c, axes, angle_deg, 0, 360, face, -1, cv2.LINE_8, SHIFT)
     cv2.ellipse(big, c, (_fx(radius * 0.38), _fx(radius * 0.38 * ratio)), angle_deg, 0, 360,
                 hub, -1, cv2.LINE_8, SHIFT)
-    cv2.ellipse(big, c, (_fx(radius * 0.11), _fx(radius * 0.11 * ratio)), angle_deg, 0, 360,
+    end = c
+    if sleeve is not None:
+        end = (_at(centre[0] + sleeve[0]), _at(centre[1] + sleeve[1]))
+        cv2.line(big, c, end, TUBE, _fx(2 * radius * 0.11) >> SHIFT, cv2.LINE_8, SHIFT)
+    cv2.ellipse(big, end, (_fx(radius * 0.11), _fx(radius * 0.11 * ratio)), angle_deg, 0, 360,
                 SLEEVE, -1, cv2.LINE_8, SHIFT)
     region[:] = cv2.resize(big, (x1 - x0, y1 - y0), interpolation=cv2.INTER_AREA)
     return image

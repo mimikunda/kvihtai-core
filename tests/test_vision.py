@@ -4,9 +4,10 @@ Everything here runs on synthetic points and synthetic images, so the suite
 needs no footage and says nothing about how well the tracker does on a real
 plate in a real gym; that is judged against footage, by eye. What it pins down
 is that each piece does what it claims: that an edge is found to a fraction of
-a pixel whatever the plate's colour, that a partial rim still gives the
-centre, that a ring the size of a plate does not pass for one, and that the
-path through the candidates follows the plate that moves.
+a pixel whatever the plate's colour, that the tread beside the face does not
+move it, that a partial rim still gives the centre, that a ring the size of a
+plate does not pass for one, and that the path through the candidates follows
+the plate that moves.
 """
 
 import math
@@ -14,10 +15,9 @@ import math
 import numpy as np
 import pytest
 
-from app.vision import appearance
+from app.vision import face
 from app.vision.candidates import Candidate, concentricity, find_candidates, rim_radius
-from app.vision.edges import ray_edges, rim_patch, to_lab
-from app.vision.outline import Outline, fit_outline, learn_outline, recentre, sectors_covered
+from app.vision.edges import to_lab
 from app.vision.path import anchor, best_path, nearer, other_end
 from app.vision.plate import max_step_px
 import synthetic as syn
@@ -35,91 +35,114 @@ class TestPlate:
         assert max_step_px(225, 0.01) == pytest.approx(30.0)
 
 
-class TestEdges:
+def _rays(img, centre, R):
+    """Edges along the rays the face fit casts from centre."""
+    roi = img.astype(np.float32)
+    phi = 2 * math.pi * np.arange(face.RAYS) / face.RAYS
+    radii = np.arange((1 - face.INNER) * R, (1 + face.OUTER) * R, face.STEP)
+    xs = (centre[0] + np.outer(np.cos(phi), radii)).astype(np.float32)
+    ys = (centre[1] + np.outer(np.sin(phi), radii)).astype(np.float32)
+    return phi, face.rim_edges(face.sample(roi, xs, ys), radii)
+
+
+class TestFace:
     @pytest.mark.parametrize("name", sorted(COLOURS))
     def test_centre_to_a_few_hundredths_of_a_pixel_whatever_the_colour(self, name):
         img = syn.textured_background((240, 240), seed=3)
         true = np.array([118.37, 121.81])
         syn.draw_plate(img, true, 60.0, face=COLOURS[name])
-        # rays from a centre that is off by a couple of pixels, as a coarse one is
-        start = true + [2.0, -1.5]
-        patch, origin = rim_patch(img, start, 80)
-        pts, strength, ray = ray_edges(patch, origin, start, 60.0, 0.85, 1.15)
-        dist = np.hypot(pts[:, 0] - true[0], pts[:, 1] - true[1]) - 60.0
-        on_rim = np.abs(dist) < 0.5
-        assert len(np.unique(ray[on_rim])) >= 0.9 * 180
-        # a single edge is good to a couple of tenths; the rim as a whole far better
-        assert np.median(np.abs(dist[on_rim])) < 0.2
-        fit = fit_outline(pts, Outline(), start, 60.0)
-        assert np.hypot(*(fit.centre - true)) < 0.05
-        # Lab is not linear in the camera's values, so the steepest point of a
-        # blurred step leans a little towards the darker side. The lean is the
-        # same all round the rim: it moves the size by 0.2 %, never the centre.
-        assert fit.scale == pytest.approx(60.0, abs=0.2)
+        # from a guess off by a couple of pixels, as the frame before gives
+        f, _ = face.measure(img, (0, 0), [true + [2.0, -1.5]], 60.0)
+        assert np.hypot(f.x - true[0], f.y - true[1]) < 0.05
+        assert f.r == pytest.approx(60.0, abs=0.2)
+        assert f.rays >= 0.95 * face.RAYS and f.sectors == 12
 
-    def test_a_ray_reports_both_edges_where_the_tread_shows(self):
+    def test_a_crop_is_measured_in_full_frame_pixels(self):
+        img = syn.textured_background((240, 240), seed=3)
+        syn.draw_plate(img, (118.37, 121.81), 60.0)
+        whole, _ = face.measure(img, (0, 0), [(120.0, 120.0)], 60.0)
+        crop, _ = face.measure(img[30:, 20:], (20, 30), [(120.0, 120.0)], 60.0)
+        assert (crop.x, crop.y, crop.r) == pytest.approx((whole.x, whole.y, whole.r), abs=1e-6)
+
+    def test_an_edge_is_the_middle_of_its_transition(self):
+        # a step blurred over several pixels, lighter on the outside and with
+        # a lean of colour that a lightness-only edge would not see
+        radii = np.arange(30.0, 70.0, face.STEP)
+        s = 0.5 * (1 + np.tanh((radii - 50.3) / 2.0))
+        v = np.zeros((1, len(radii), 3), np.float32)
+        v[0, :, 0] = 20.0 + 40.0 * s
+        v[0, :, 1] = 30.0 * s
+        rad, _ = face.rim_edges(v, radii)
+        assert rad[0, 0] == pytest.approx(50.3, abs=0.05)
+
+    def test_every_edge_on_a_ray_is_a_candidate(self):
         img = syn.textured_background((240, 240), seed=4)
         syn.draw_plate(img, (130.0, 130.0), 60.0, face=syn.RED, tread=(-8.0, 0.0),
                        tread_colour=(120, 150, 230))
-        patch, origin = rim_patch(img, (130.0, 130.0), 80)
-        pts, _, ray = ray_edges(patch, origin, (130.0, 130.0), 60.0, 0.85, 1.25)
-        left = pts[ray == 90]      # the ray pointing left, into the tread
-        xs = sorted(left[:, 0])
-        assert any(abs(x - 62.0) < 0.6 for x in xs), xs     # tread meets background
-        assert any(abs(x - 70.0) < 0.6 for x in xs), xs     # face meets tread
+        phi, (rad, _) = _rays(img, (130.0, 130.0), 60.0)
+        left = rad[face.RAYS // 2]          # the ray pointing left, into the tread
+        assert np.any(np.abs(left - 68.0) < 0.6), left       # tread meets background
+        assert np.any(np.abs(left - 60.0) < 0.6), left       # face meets tread
 
+    def test_the_tread_beyond_the_face_does_not_pull_it(self):
+        """The tread shows on the side away from the sleeve's end, which says which side that is."""
+        img = syn.textured_background((260, 260), seed=7)
+        true = (131.3, 128.6)
+        syn.draw_plate(img, true, 60.0, face=syn.RED, tread=(-6.0, -3.0), sleeve=(24.0, 12.0))
+        f, _ = face.measure(img, (0, 0), [(130.0, 130.0)], 60.0)
+        assert f.sleeve == pytest.approx((true[0] + 24.0, true[1] + 12.0), abs=1.0)
+        assert np.hypot(f.x - true[0], f.y - true[1]) < 0.3
 
-class TestOutlineFit:
-    def test_recovers_centre_and_scale(self):
-        pts = syn.circle_points(200.3, 150.7, 80.0)
-        fit = fit_outline(pts, Outline(), (197.0, 153.0), 76.0)
-        assert fit.centre == pytest.approx([200.3, 150.7], abs=1e-3)
-        assert fit.scale == pytest.approx(80.0, abs=1e-3)
+    def test_the_fit_ends_where_it_ends_whatever_the_start(self):
+        img = syn.textured_background((240, 240), seed=8)
+        true = (121.2, 119.4)
+        syn.draw_plate(img, true, 60.0, face=syn.BLUE, tread=(5.0, -4.0), sleeve=(-20.0, 16.0))
+        ends = []
+        for a in np.arange(8) * math.pi / 4:
+            f, _ = face.measure(img, (0, 0), [(true[0] + 5 * math.cos(a), true[1] + 5 * math.sin(a))], 60.0)
+            ends.append((f.x, f.y))
+        assert np.ptp(np.array(ends), axis=0).max() < 0.05
 
     def test_a_third_of_the_rim_and_many_stray_edges(self):
-        """A hand across the plate: a third of the rim left, and clutter everywhere."""
+        """A hand across the plate: a third of the rim left, and clutter all round."""
         rng = np.random.default_rng(0)
-        rim = syn.circle_points(300.0, 400.0, 79.0, count=60, arc=2 * math.pi / 3)
-        rim = rim + rng.normal(0, 0.3, rim.shape)
-        clutter = np.array([300.0, 400.0]) + rng.uniform(-90, 90, (50, 2))
-        pts = np.vstack([rim, clutter])
-        fit = fit_outline(pts, Outline(), (302.0, 398.0), 79.0, scale_prior=79.0, prior_weight=3.0)
-        assert np.hypot(*(fit.centre - [300.0, 400.0])) < 0.5
-        # a plain least-squares circle through the same points is nowhere near
-        x, y = pts[:, 0], pts[:, 1]
-        sol, *_ = np.linalg.lstsq(np.column_stack([x, y, np.ones_like(x)]), x * x + y * y, rcond=None)
-        assert np.hypot(sol[0] / 2 - 300.0, sol[1] / 2 - 400.0) > 2
+        c0, R = np.array([300.0, 400.0]), 79.0
+        phi = 2 * math.pi * np.arange(180) / 180
+        rad = np.full((180, 2), np.nan)
+        arc = phi < 2 * math.pi / 3
+        rad[arc, 0] = R + rng.normal(0, 0.3, arc.sum())
+        stray = rng.choice(180, 50, replace=False)
+        rad[stray, 1] = rng.uniform(0.85 * R, 1.2 * R, 50)
+        f = face.fit_face(c0, phi, (rad, None), (302.0, 398.0, R), r_prior=(R, 20.0))
+        assert np.hypot(f.x - c0[0], f.y - c0[1]) < 0.3
+        assert f.rays >= 58          # the arc, and the odd stray edge that happens to lie on the rim
 
-    def test_the_prior_stops_scale_and_position_trading_on_a_short_arc(self):
-        rim = syn.circle_points(0.0, 0.0, 100.0, count=40, arc=math.pi / 3, start=-math.pi / 6)
-        rim[:, 0] += 0.5                     # a small bias, as blur or a shadow gives
-        loose = fit_outline(rim, Outline(), (2.0, 0.0), 100.0)
-        held = fit_outline(rim, Outline(), (2.0, 0.0), 100.0, scale_prior=100.0, prior_weight=30.0)
-        assert abs(held.centre[0] - 0.5) < abs(loose.centre[0] - 0.5) + 1e-9
-        assert held.centre[0] == pytest.approx(0.5, abs=0.05)
+    def test_an_ellipse_is_fitted_with_its_shape(self):
+        img = syn.textured_background((260, 260), seed=9)
+        true = (129.6, 131.2)
+        syn.draw_plate(img, true, 70.0, face=syn.GREEN, ratio=0.85, angle_deg=80.0, hub=(60, 60, 60))
+        shape = (0.85, math.radians(80.0))
+        f, _ = face.measure(img, (0, 0), [(128.0, 132.0)], 70.0, shape=shape)
+        assert np.hypot(f.x - true[0], f.y - true[1]) < 0.1
+        assert f.r == pytest.approx(70.0, abs=0.3)
+        circle, _ = face.measure(img, (0, 0), [(128.0, 132.0)], 70.0)
+        assert f.rays > circle.rays
 
-    def test_sectors_count_directions_not_points(self):
-        pts = syn.circle_points(0, 0, 50, count=100, arc=math.pi)
-        assert sectors_covered(pts, (0, 0)) == 6
+    def test_the_sleeve_end_is_found_where_it_stands(self):
+        img = syn.textured_background((240, 240), seed=10)
+        syn.draw_plate(img, (120.0, 120.0), 60.0, face=syn.BLACK, sleeve=(-14.3, 27.6))
+        e = face.sleeve_end(img.astype(np.float32), (120.0, 120.0), 60.0)
+        # the tube running into it from one side leans it by a fraction of a pixel; it is only a guide
+        assert (e[0], e[1]) == pytest.approx((120.0 - 14.3, 120.0 + 27.6), abs=1.0)
 
-
-class TestOutlineLearning:
-    def test_learns_an_ellipse_from_many_frames(self):
-        rng = np.random.default_rng(1)
-        phis, rs = [], []
-        for _ in range(30):
-            scale = rng.uniform(70, 90)
-            pts = syn.circle_points(0, 0, scale, ratio=0.8, angle_deg=90) + rng.normal(0, 0.2, (180, 2))
-            phis.append(np.arctan2(pts[:, 1], pts[:, 0]))
-            rs.append(np.hypot(pts[:, 0], pts[:, 1]) / scale)
-        rho = learn_outline(np.concatenate(phis), np.concatenate(rs), lo=0.6, hi=1.2)
-        rho, shift, factor = recentre(rho)
-        outline = Outline(rho)
-        # major axis vertical, 0.8 across: after recentring the extremes keep that ratio
-        up, _ = outline.at(np.array([math.pi / 2]))
-        side, _ = outline.at(np.array([0.0]))
-        assert side[0] / up[0] == pytest.approx(0.8, abs=0.01)
-        assert np.hypot(*shift) < 0.01
+    def test_a_face_is_even_and_a_ring_with_the_room_inside_is_not(self):
+        img = syn.textured_background((300, 200), seed=5)
+        syn.draw_plate(img, (80.0, 100.0), 45.0, face=syn.RED)
+        syn.draw_ring(img, (220.0, 100.0), 45.0)
+        roi = img.astype(np.float32)
+        plate = face.face_colour(roi, (80.0, 100.0), 45.0)
+        ring = face.face_colour(roi, (220.0, 100.0), 45.0)
+        assert plate[3] < 1.0 and ring[3] > 3.0
 
 
 class TestCandidates:
@@ -202,11 +225,3 @@ class TestPath:
         detections = [(i, [(x, y, r)] + ([(x + 150.0, y + 20.0, 30.0)] if k == 3 else []))
                       for k, (i, (x, y, r)) in enumerate(track)]
         assert other_end(detections, track) is None
-
-
-class TestAppearance:
-    def test_similarity_is_correlation_of_the_profile(self):
-        p = np.column_stack([np.linspace(0, 100, 32), np.zeros(32), np.zeros(32)])
-        assert appearance.similarity(p, p) == pytest.approx(1.0)
-        assert appearance.similarity(p, p * 0.5 + 40) == pytest.approx(1.0)
-        assert appearance.similarity(p[::-1], p) == pytest.approx(-1.0)

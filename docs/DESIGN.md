@@ -106,75 +106,135 @@ is bounded by the far plate's: on ten clips the near plate was 1.22 to 1.35
 times the far one in the picture, and round the near plate the extent can run
 off into a plain wall; on one clip it came out four times the plate.
 
-**Fine.** Edges are found along 180 rays from the centre, as the largest steps
-in Lab colour, refined to sub-pixel with a parabola. Lab, because a plate can
-differ from its background in lightness alone (black on dark clothes) or in
-hue alone (red on skin). The image is blurred in floating point before this:
-blurring in 8 bits rounds every edge to the same few levels and doubled the
-jitter.
+**Fine.** What is measured is the front face's rim. Its centre is the bar end,
+and it is what a person marks as the plate. The outline in the picture is not
+the face: seen a little from the side, the tread shows beyond the face on one
+side, with the plates behind it and the far end of the bar further out still.
+On the station's gym footage that band was 13 to 19 px wide at the top of a
+lift, on a plate 300 px across.
 
-The outline is learned once per set rather than assumed. Its radius as a
-function of direction is pooled from a sample of frames, and in each direction
-the outermost edge seen nearly as often as the most common one is taken, so it
-is the silhouette and never the face edge inside the tread. Taking whichever
-is more common let the outline switch between the two from one direction to
-the next. Per frame, only a position and a scale are fitted to that fixed
-shape, robustly, so a hand across the rim is ignored rather than averaged in.
-A free ellipse per frame lets shape and position trade against each other, and
-that trade is exactly the sideways jumping of the bar centre.
+Which side it shows on, the sleeve says. Its end stands out of the plate
+towards the camera, and parallax carries it across the face: below the hub
+while the bar rests on the floor below the camera, above it overhead. The tread
+lies on the other side, moved out by the same parallax applied to the plate's
+thickness. So the sleeve's end is found in every frame, as the strongest blob
+of its size, 0.12 of the plate's radius, in lightness less chroma: steel is
+light and without colour where plates are coloured or dark. A blob counts only
+if it is lighter than nearly all of the ring round it; the edge of a steel hub
+is light inside too, but light on half its ring. On the side away from the
+sleeve's end, edges beyond the face, up to 0.3 times the end's offset from the
+centre, cost nothing.
 
-The scale is held to a running median of the frames where the rim is seen all
-the way round, over a quarter of a second. It still follows the plate towards
-and away from the camera, but a frame that sees only an arc cannot trade its
-scale against its position.
+Edges are found along 180 rays, every peak of the colour gradient in Lab, each
+placed at the middle of its transition: the centroid of the gradient above 30 %
+of its peak between the minima either side. For a rim smeared by motion that
+is where it was at mid-exposure; on synthetic blur it stayed within half a
+pixel up to an 8 px smear. Lab, because a plate can differ from its background
+in lightness alone (black on dark clothes) or in hue alone (red on skin).
 
-Where the tread or the plates behind show, the outline can sit on the stack's
-silhouette or on the front face's edge a tread's width in. In the catch of the
-first test clip the fit flipped between the two from frame to frame, 12 px
-apart, and both had a residual under 1.5 px and edges in 12 of 12 sectors. What
-tells them apart is the share of rays with an edge on the outline: 155 to 170
-of 180 for the right one, 120 to 126 for the other. So a fit that disagrees
-with what its neighbours predict is tried again from their prediction, and
-whichever explains more of the rim is kept.
+The face is fitted by soft assignment: every edge on a ray counts, weighed by
+a Gaussian of its distance from the face against a level for "none of these is
+the rim", with sigma shrinking from 3 px to 1 px. The cost is smooth, so a
+start a few pixels off does not hold the fit where it began. A fit that takes on
+each ray only the edge nearest the model stays where it started, and on the
+gym footage it started on the outline, tread and all, and stayed 5 to 8 px off
+the face at rest and at the top of the lift. The radius is held near the frames
+before. Off square the face is an ellipse; its axis ratio and direction are
+learned from the first 20 frames of the set, and only position and size are
+fitted per frame.
 
-The front face is then recovered from the same pooled edges: it is the tread
-vector that puts the most edges where the face edge would have to be, inside
-the silhouette on the tread side. The face's centre is the bar end, its major
-axis is the 450 mm, and its axis ratio is the camera angle.
+It is not unique where the rim is a band. The rounded edge of a plate shows 5
+to 6 px wide, lit where it faces the light, and the fit can take the outer edge
+of it at the top and the inner at the bottom, or the other way round: the same
+radius, the centre 3 px apart either way. Which one it settles on depends on
+the centre the rays are cast from and the start, both taken from the frames
+before, so it carries over from frame to frame. On a gym
+set, this tracker and its prototype, which fit a frame alike to 0.3 px given
+the same start, put the centre more than 2 px apart in a tenth of the frames,
+in runs of up to a dozen.
 
-Frames are accepted on four checks: edges in at least 5 of 12 directions round
-the rim, a median edge distance from the outline under 3 % of the radius, a
-scale within 5 % of the running median, and a radial brightness profile that
-correlates with the set's median profile. A set that followed the wrong thing
-from start to finish agrees with its own median, so the whole set must also
-carry its face: sampled in the circle's own frame, the inside of a plate is the
-same picture wherever it has moved to, while a ring or a wheel shows the room
-behind it sliding through. Frames a radius apart are compared. Concentricity,
-which used to decide this, cannot on the new footage: a plate with a printed
-label and a lighting gradient scores 0.08 where a ring scores 0.11. A set that
-never moved a radius still has to be built in rings. Rejected frames are
-reported with the reason and never interpolated. A frame the coarse stage lost between two measured ones is
-looked for again between them, up to 12 frames.
+The face is followed frame by frame, both ways from the first frame in which it
+is found round the coarse centre with the rim nearly all round; its radius is
+searched there from 0.8 to 1.15 of the coarse one, which is the outline. Each
+frame is looked for where the two before put it, and where the sleeve's end,
+looked for near where its last offset puts it, says. That offset changes only
+slowly, so the sleeve places the face within a pixel or two even where the bar
+moves 30 px between frames. Where both fail, the coarse centre is tried, and
+once the face has been lost for a few frames, circles of its size from a Hough
+transform over the whole image: the frame, or the wide crop the live stage
+keeps while it has lost the plate too. Of those this set's face could be, the
+nearest to where it was going is taken; taking the one with most rim on it
+jumped to a railing on one clip.
+
+A frame is accepted when:
+
+- the rim is on at least 60 of the 180 rays, in at least 8 of 12 directions;
+- the radius is within 3 % of the frames before. Not of the start: a plate
+  carried towards the camera grows, by 17 % from the floor to overhead on one
+  clip, and held to the start's size it was rejected, then fitted inside its
+  rim;
+- the face has not moved faster than a dropped bar, 6 m/s;
+- the face has the colour of the 10 accepted frames before, within 7 in a and
+  b of Lab and 18 in L, and is as even: the spread of each at most 2.5 times
+  theirs. After the bar was dropped on the gym footage, a ring and a rack were
+  followed until this check: a face spreads 1 to 3.5 in L, they spread 15 to
+  21. Against the frames before rather than the start, because the light
+  changes as the bar moves through it and a phone's exposure follows; against
+  the start it rejected 193 frames of one clip that were right, and against
+  the 30 frames before it still rejected the top of the third lift on the
+  second test clip.
+
+A set that followed the wrong thing from start to finish agrees with itself, so
+the whole set must also carry its face: sampled in the circle's own frame, the
+inside of a plate is the same picture wherever it has moved to, while a ring or
+a wheel shows the room behind it sliding through. Frames a radius apart are
+compared. Concentricity, which used to decide this, cannot on the new footage:
+a plate with a printed label and a lighting gradient scores 0.08 where a ring
+scores 0.11. A set that never moved a radius still has to be built in rings.
+Rejected frames are reported with the reason and never interpolated.
+
+Each frame's millimetres per pixel come from the face's major axis, smoothed
+by a running median over a quarter of a second: positions are measured from
+the image centre and scaled per frame, and a scale that jittered by 0.3 % would
+move a plate 500 px from the centre by 1.5 px.
+
+The tracker before this one learned the outline once per set and fitted only
+its position and scale per frame, then put the face a fixed tread's width
+inside it. One outline cannot follow a tread that swings from above the face
+to below it during a lift: against hand-marked rims it was off by a median of
+4.8 px and up to 19 px.
 
 ### What has been verified
 
-Two phone clips, both handheld, and synthetic plates.
+Two phone clips, both handheld, synthetic plates, 37 more phone clips, and six
+sets from the station at the gym checked against rims marked by hand.
 
-- **A 5.3 s snatch**, 720x1280 at 60 fps, red competition plates, about 13
-  degrees off square. 311 of 319 frames measured. The 8 rejected are the
-  dropped bar at the end, too blurred to recognise. Pull 1015 mm, peak 2.05 m/s.
-  The centre's frame-to-frame noise, measured as the scatter about a local
-  quadratic over five frames, is 0.15 px, against 0.19 px for the earlier
-  red-only tracker.
-- **A 6.2 s clip of three lifts**, 1440x1920 at 30 fps, about 11 degrees off
-  square. 185 of 185 frames measured. At 30 fps the plate moves up to 50 px
-  between frames and is visibly smeared, and the noise is 0.6 px.
+Noise below is the scatter of the centre about a local quadratic over five
+frames, with the same script for the earlier tracker, the one that learned the
+outline once per set.
+
+- **A 5.3 s snatch**, 720x1280 at 60 fps, red competition plates, about 10
+  degrees off square. 319 of 319 frames measured, against 311. Pull 1032 mm,
+  peak 1.86 m/s. The earlier tracker gave 2.05 m/s, from a step of 18 px in
+  one frame after two frames 6 px behind; this one moves 10 to 12 px a frame
+  there. Noise 0.26 px, against 0.31.
+- **A 6.2 s clip of three lifts**, 1440x1920 at 30 fps, near square. 185 of
+  185 frames measured, against 182. At 30 fps the plate moves up to 50 px
+  between frames and is visibly smeared; noise 0.82 px, against 2.0.
 - **Synthetic plates** of every colour, with and without visible tread, and a
-  ring of the plate's exact size in the background. Face centre within 0.3 px,
+  ring of the plate's exact size in the background. Face centre within 0.5 px,
   scale within 1 %, velocity within 2 %.
+- **Gym sets from the station**, 1536x864 at 60 fps, against the front face's
+  rim marked by hand in 10 frames each of two sets: the centre is a median of
+  1.8 and 1.4 px off, at most 5.1 and 2.5 px. The earlier tracker was 3.9 and
+  6.2 px off, at most 5.4 and 13.6, and rejected 3 of the 20 frames. The marks
+  themselves scatter by about 1.2 px. The largest miss is the band described
+  above, at the top of a fast pull. Of six usable sets 96 % of frames were
+  measured; the rest is mostly the plate leaving the picture.
 
-The earlier red-only tracker put the first clip at 19 degrees, this one at 13.
-Neither can be trusted at that angle, for the reason given under Geometry.
+The earlier red-only tracker put the first clip at 19 degrees, the outline
+tracker at 13, this one at 10. None can be trusted at that angle, for the
+reason given under Geometry.
 
 Both clips were shot handheld. The camera moves by up to 38 px during them,
 zooms by 1 % and turns by 1 degree. The per-frame scale absorbs the zoom, but
@@ -184,24 +244,37 @@ this goes away; on these clips it cannot be separated from the bar.
 **Oblique views have a limit.** On synthetic plates the tracker is exact to 25
 degrees off square. From 30 degrees the coarse stage, which looks for circles,
 hands the fine stage a centre off by 5 to 11 px, and at 40 degrees the camera
-angle comes out as 25. At 50 degrees nothing is found. The fine stage's
-outline learning also assumes the silhouette lies within 15 % of a circle. Both
+angle comes out as 25. At 50 degrees nothing is found. The fine stage looks
+for the rim from 0.88 to 1.2 of the face's semi-major axis round its centre,
+so beyond 28 degrees, where the minor axis is shorter than 0.88 of the major,
+the rim near the ends of the minor axis falls outside what it looks at. Both
 need work before a camera well off to the side can be supported.
 
 **37 more phone clips**, from six sessions in four gyms, handheld and upright:
 31 at 720x1280 and 60 fps, 6 at 480x848 and 24 or 30 fps, 526 s in all. With
-the near side given, 24,273 of 27,845 frames were measured (87 %), on the near
-plate. The median noise is 0.42 px, from 0.12 to 1.3 px. Before the near
-plate was followed the share was 92 %, but on 14 clips of the far plate, which
-is easier to measure: its noise was 0.15 to 0.3 px on the clips where it has
-since gone to 0.3 to 1.3. Not yet right:
+the near side given, 26,359 of 27,845 frames were measured (95 %), against
+24,273 (87 %) with the outline tracker. The median noise is 0.26 px, from 0.13
+to 0.78, against 0.42, from 0.09 to 1.24. Not yet right, all of it in the
+coarse stage or the start:
 
-- two clips measure nothing: on one the path leaves the near plate for a knee
-  and a board where Hough never saw the plate, on the other the plate comes out
-  1.8 times its size;
-- on one clip a plate lying still on the floor is followed instead of the bar,
-  the camera's shake giving it the most travel;
-- the appearance check rejects frames that are right: 225 of 755 on one clip.
+- two clips measure nothing, as before. Started from another frame, one of
+  them was measured whole;
+- on two clips the face is followed from the first frame of a coarse path that
+  begins on the wrong thing and reaches the near plate only after a gap: on
+  one it stays on the far plate (608 frames), on the other on the lifter's
+  legs and then the far plate (496 frames). The outline tracker measured each
+  frame round the coarse centre, and on the first of them went over to the
+  near plate with the path;
+- on one clip a plate lying still on the floor is followed instead of the bar
+  (747 frames), the camera's shake giving it the most travel;
+- on one clip the start took the outline of the plate and the one behind it
+  for the face, about 7 % too large.
+
+Starting from the longest stretch the coarse stage followed without a break
+put four of these right and broke three clips that were right: on one the path
+held a circle in the empty background after the plate had left, and the face
+was followed there and accepted; on another the start took a smaller circle
+off the face's centre. So the start is chosen as before, from the first frame.
 
 Verification habit: check every reported frame against the footage, as a
 contact sheet of all of them. Rim scatter says how well the edges agree with
@@ -279,8 +352,10 @@ Three threads, and a fourth for searching:
   not. The frame rate is 60 fps, not 80, because the station records every
   frame, see Station below.
 
-Live and offline agree on both clips: rises of 1016 and 715 mm live against
-1015 and 721 mm offline on the first, and about 1 % lower live on the second.
+Live and offline: rises of 1018 and 717 mm live against 1032 and 711 mm
+offline on the first clip; 535, 801 and 856 mm against 560, 823 and 853 on the
+second. With the outline tracker the second clip agreed to 1 %; the first rise
+there is now 5 % apart, not yet looked into.
 
 Measured on the test Pi 4B, with the clip decoded into memory first:
 
@@ -290,6 +365,10 @@ Measured on the test Pi 4B, with the clip decoded into memory first:
 | check, every 8th frame | 20 ms | 51 ms |
 | follow, every frame | 13 ms, 75 fps at most | 23 ms, 44 fps at most |
 | analysis, after the set | 66 ms a frame | 134 ms a frame |
+
+The analysis row is the outline tracker's. Measured later on the same Pi with
+the station recording in the background, it took 163 and 337 ms a frame, and
+the face tracker 137 and 272.
 
 Both clips played at their own rate through the whole pipeline on the Pi 4,
 decoding included, and lost no frames. The Pi 5 is expected to be two to three
@@ -424,13 +503,13 @@ boot as a systemd service, and a camera that fails is opened again.
 ## Open Questions
 
 - **Oblique views.** Beyond about 25 degrees off square the coarse stage and the
-  outline learning need work, see above. A clip at 45 to 60 degrees is the test.
-- **Analysis time on the Pi.** At 66 to 134 ms a frame on the Pi 4, a 30 s set
-  at 60 fps takes minutes; a 4.5 s set took 28 s in the station. About half of
-  a short set's time is learning the outline, which is the same for any
-  length. Options: fewer rays, fewer frames for the outline, measuring every
-  frame only where the bar moves fast, or spreading the frames over the Pi's
-  idle cores.
+  fine stage's search band need work, see above. A clip at 45 to 60 degrees is the test.
+- **Analysis time on the Pi.** At 137 to 272 ms a frame on the Pi 4 with the
+  station recording, a 30 s set at 60 fps takes minutes. On the laptop 60 %
+  of it is the fit, iterated at each of five sigmas, a fifth finding the edges
+  and an eighth the sleeve's end. Options: fewer sigmas or rays, measuring
+  every frame only where the bar moves fast, or spreading the frames over the
+  Pi's idle cores.
 - **Following at 60 fps on a Pi 4.** With a plate near the camera the watcher
   needs nearly all of the 16.7 ms between frames, and falls behind when
   anything else runs. The 4 s ring buffer absorbs that for a while; a long set
